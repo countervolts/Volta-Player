@@ -11,8 +11,10 @@ import {
   type MouseEvent as ReactMouseEvent,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowDownWideNarrow,
+  Ban,
   ChevronLeft,
   ChevronRight,
   CircleUserRound,
@@ -36,6 +38,7 @@ import {
   Settings2,
   Shuffle,
   Star,
+  ThumbsDown,
   UserRound,
   X,
 } from "lucide-react";
@@ -85,6 +88,7 @@ import {
   favoriteAlbumIdsFromSongs,
   mergeRecommendationCandidates,
   rankAlbumRecommendations,
+  topArtistSeeds,
 } from "./lib/recommendations";
 import {
   appendListeningEvent,
@@ -97,6 +101,35 @@ import {
   type ListeningProfile,
 } from "./lib/listening-history";
 import {
+  appendEngagement,
+  clearEngagement,
+  createEngagementEvent,
+  engagementStorageKey,
+  readEngagement,
+  summarizeEngagement,
+  type EngagementEntity,
+  type EngagementEvent,
+  type EngagementEventInput,
+  type EngagementProfile,
+} from "./lib/interactions";
+import {
+  attributeReward,
+  clearRankerState,
+  emptyRankerModel,
+  impressionStorageKey,
+  rankerConfidence,
+  rankerModelStorageKey,
+  readImpressions,
+  readRankerModel,
+  trainRanker,
+  writeImpressions,
+  writeRankerModel,
+  type PendingImpression,
+  type RankerExample,
+  type RankerModel,
+  type RewardTarget,
+} from "./lib/learned-ranker";
+import {
   bindingFromKeyboardEvent,
   bindingSignature,
   formatShortcut,
@@ -108,6 +141,7 @@ import {
   type ShortcutBindings,
   type ShortcutId,
 } from "./shortcuts";
+import "./version-handoff";
 
 type Page =
   | "home"
@@ -122,7 +156,8 @@ type Page =
   | "genre"
   | "album"
   | "artist"
-  | "playlist";
+  | "playlist"
+  | "settings";
 type Route = { page: Page; id?: string; title?: string };
 type ContextTarget =
   | { type: "song"; item: Song; x: number; y: number }
@@ -300,6 +335,7 @@ const TITLES: Record<Page, string> = {
   album: "Album",
   artist: "Artist",
   playlist: "Playlist",
+  settings: "Settings",
 };
 const safeRead = (storage: Storage, key: string) => {
   try {
@@ -343,6 +379,7 @@ const INTERFACE_SCALE_KEY = "volta-interface-scale";
 const EXTERNAL_LYRICS_KEY = "volta-external-lyrics";
 const INFINITE_PLAY_COUNT_KEY = "volta-infinite-play-count";
 const INFINITE_PLAY_MODE_KEY = "volta-infinite-play-mode";
+const INFINITE_PLAY_ENABLED_KEY = "volta-infinite-play-enabled";
 type InfinitePlayMode = "algorithm" | "random";
 const LISTENING_HISTORY_ENABLED_KEY = "volta-listening-history-enabled";
 const LISTENING_HISTORY_PERSIST_KEY = "volta-listening-history-persist";
@@ -423,6 +460,62 @@ const localVolumeKey = (directoryName: string) =>
   `volta-local-volume:${encodeURIComponent(directoryName)}`;
 const LOCAL_SOURCE_MODE_KEY = "volta-source-mode";
 const SEARCH_HISTORY_KEY = "volta-search-history";
+/** How long after a shelf impression an action can still be credited to it. */
+const REWARD_WINDOW_MS = 6 * 60 * 60 * 1000;
+const splitGenres = (value?: string) =>
+  (value || "")
+    .split(/[,;|/]+/)
+    .map((genre) => genre.trim())
+    .filter(Boolean);
+const engagementEntityForSong = (song: Song): EngagementEntity => ({
+  type: "song",
+  id: song.id,
+  name: song.title,
+  artistId: song.artistId || song.albumArtist,
+  artistName: song.artist,
+  albumId: song.albumId,
+  albumName: song.album,
+  genre: song.genre,
+});
+const engagementEntityForAlbum = (album: AlbumRecord): EngagementEntity => ({
+  type: "album",
+  id: album.id,
+  name: albumName(album),
+  artistId: album.artistId,
+  artistName: album.artist,
+  genre: album.genre,
+  year: album.year,
+});
+const rewardTargetForSong = (song: Song): RewardTarget => ({
+  albumId: song.albumId,
+  artistId: song.artistId || song.albumArtist,
+  genres: splitGenres(song.genre),
+});
+const rewardTargetForAlbum = (album: AlbumRecord): RewardTarget => ({
+  albumId: album.id,
+  artistId: album.artistId,
+  genres: splitGenres(album.genre),
+});
+/**
+ * Convert a playback event into a learning signal. Completing a song is the
+ * strongest positive; an early skip is the strongest negative.
+ */
+const playbackReward = (event: ListeningEvent) => {
+  switch (event.kind) {
+    case "start":
+      return 0.5;
+    case "resume":
+      return 0.15;
+    case "complete":
+      return 0.9;
+    case "skip":
+      return -0.5 - (1 - event.completionRatio) * 0.4;
+    case "stop":
+      return event.completionRatio > 0.5 ? 0.2 : -0.2;
+    default:
+      return 0;
+  }
+};
 const readSearchHistory = (): string[] => {
   try {
     const value = JSON.parse(safeRead(localStorage, SEARCH_HISTORY_KEY));
@@ -769,18 +862,45 @@ const LISTENING_EVENT_LABELS: Record<string, string> = {
   seek: "Sought",
 };
 
+const ENGAGEMENT_EVENT_LABELS: Record<string, string> = {
+  "album-view": "Opened album",
+  "artist-view": "Opened artist",
+  "genre-view": "Browsed genre",
+  "favorite-add": "Favorited",
+  "favorite-remove": "Unfavorited",
+  "queue-add": "Queued",
+  "play-next": "Play next",
+  "album-play": "Played album",
+  "album-shuffle": "Shuffled album",
+  "playlist-add": "Added to playlist",
+  search: "Searched",
+  "recommendation-click": "Opened a suggestion",
+  dislike: "Not interested",
+  undislike: "Undid not interested",
+  "artist-mute": "Muted artist",
+  "artist-unmute": "Unmuted artist",
+};
+
 function ListeningHistoryView({
   events,
   profile,
+  engagementEvents,
+  engagementProfile,
+  rankerModel,
   enabled,
   persistent,
   onPersistenceChange,
+  onResetLearning,
 }: {
   events: readonly ListeningEvent[];
   profile: ListeningProfile;
+  engagementEvents: readonly EngagementEvent[];
+  engagementProfile: EngagementProfile;
+  rankerModel: RankerModel;
   enabled: boolean;
   persistent: boolean;
   onPersistenceChange: (value: boolean) => void;
+  onResetLearning: () => void;
 }) {
   const recentEvents = [...events]
     .sort((left, right) => right.at - left.at)
@@ -791,6 +911,14 @@ function ListeningHistoryView({
   );
   const uniqueSongs = new Set(events.map((event) => event.songId)).size;
   const completion = Math.round(profile.averageCompletionRatio * 100);
+  const interactions = engagementEvents.filter(
+    (event) => event.kind !== "recommendation-impression",
+  );
+  const recentInteractions = [...interactions]
+    .sort((left, right) => right.at - left.at)
+    .slice(0, 12);
+  const learnedSamples = rankerModel.samples;
+  const learnedConfidence = Math.round(rankerConfidence(rankerModel) * 100);
   const dateFormatter = new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
@@ -807,8 +935,8 @@ function ListeningHistoryView({
             : "Personalized recommendation tracking is turned off."}
         </p>
         <small>
-          Playback history stays on this device. Normal Navidrome scrobbling is
-          separate.
+          Playback history and interactions stay on this device. Normal
+          Navidrome scrobbling is separate.
         </small>
       </div>
       <label className="listening-history-retention">
@@ -844,19 +972,72 @@ function ListeningHistoryView({
           <strong>{duration(totalSeconds)}</strong>
           <span>audible time</span>
         </div>
+        <div>
+          <strong>{interactions.length}</strong>
+          <span>actions tracked</span>
+        </div>
+        <div>
+          <strong>{learnedSamples}</strong>
+          <span>learning samples</span>
+        </div>
       </div>
       <section className="listening-history-method">
         <h3>How recommendations use this</h3>
         <ul>
           <li>Longer listens and finished songs count as stronger interest.</li>
-          <li>Early skips reduce the weight of that song, artist, and genre.</li>
-          <li>Repeated listens and songs played together shape session links.</li>
+          <li>Early skips and "not interested" reduce that artist and genre.</li>
+          <li>Favorites, queue adds, playlist adds, and album views add weight.</li>
+          <li>Songs played together in one sitting teach item-to-item similarity.</li>
           <li>Time of day, weekday, and typical track length tune the context.</li>
+          <li>A local model learns which signals predict what you actually play.</li>
         </ul>
         {profile.events > 0 && (
-          <small>Average completion across recorded outcomes: {completion}%.</small>
+          <small>
+            Average completion across recorded outcomes: {completion}%. Local
+            model confidence: {learnedConfidence}%
+            {engagementProfile.mutes.size
+              ? ` · ${engagementProfile.mutes.size} muted artist${
+                  engagementProfile.mutes.size === 1 ? "" : "s"
+                }`
+              : ""}
+            .
+          </small>
         )}
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={!learnedSamples && !interactions.length}
+          onClick={onResetLearning}
+        >
+          Reset what Volta has learned
+        </button>
       </section>
+      {recentInteractions.length > 0 && (
+        <section className="listening-history-activity">
+          <div className="listening-history-section-heading">
+            <h3>Actions</h3>
+            <span>Showing {recentInteractions.length}</span>
+          </div>
+          <div className="listening-history-list" aria-label="Recent interactions">
+            {recentInteractions.map((event) => (
+              <article className="listening-history-event" key={event.id}>
+                <div className="listening-history-event-copy">
+                  <b>{event.entity?.name || event.text || "Library"}</b>
+                  <span>
+                    {ENGAGEMENT_EVENT_LABELS[event.kind] || event.kind}
+                    {event.entity?.artistName ? ` · ${event.entity.artistName}` : ""}
+                  </span>
+                </div>
+                <div className="listening-history-event-meta">
+                  <time dateTime={new Date(event.at).toISOString()}>
+                    {dateFormatter.format(event.at)}
+                  </time>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
       <section className="listening-history-activity">
         <div className="listening-history-section-heading">
           <h3>Recent activity</h3>
@@ -1169,6 +1350,13 @@ export default function App() {
   const isBetaHost =
     window.location.hostname === "beta-player.ayois.gay" ||
     window.location.hostname === "beta-player.voltamusic.xyz";
+  const alternateVersionUrl = (() => {
+    const url = new URL(window.location.href);
+    url.hostname = isBetaHost
+      ? url.hostname.replace("beta-player.", "player.")
+      : url.hostname.replace("player.", "beta-player.");
+    return url.toString();
+  })();
   const [client, setClient] = useState<Navidrome | null>(null);
   const [sourceMode, setSourceMode] = useState<"navidrome" | "local">(
     "navidrome",
@@ -1202,6 +1390,30 @@ export default function App() {
   );
   const [listeningEvents, setListeningEvents] = useState<ListeningEvent[]>([]);
   const listeningStorage = listeningHistoryPersistent ? localStorage : sessionStorage;
+  const engagementKey = activeClient
+    ? engagementStorageKey(activeClient.server, activeClient.username)
+    : "";
+  const rankerModelKey = activeClient
+    ? rankerModelStorageKey(activeClient.server, activeClient.username)
+    : "";
+  const impressionKey = activeClient
+    ? impressionStorageKey(activeClient.server, activeClient.username)
+    : "";
+  const [engagementEvents, setEngagementEvents] = useState<EngagementEvent[]>([]);
+  const [rankerModel, setRankerModel] = useState<RankerModel>(() =>
+    emptyRankerModel(),
+  );
+  const impressionsRef = useRef<PendingImpression[]>([]);
+  const rankerModelRef = useRef<RankerModel>(emptyRankerModel());
+  const rewardedEventIds = useRef<Set<string>>(new Set());
+  const recommendedAlbumIds = useRef<Set<string>>(new Set());
+  const moveStored = useCallback((from: Storage, to: Storage, key: string) => {
+    if (!key) return;
+    const raw = safeRead(from, key);
+    safeRemove(to, key);
+    if (raw) safeWrite(to, key, raw);
+    safeRemove(from, key);
+  }, []);
   const changeListeningHistoryPersistence = useCallback(
     (persistent: boolean) => {
       if (persistent === listeningHistoryPersistent) return;
@@ -1212,10 +1424,20 @@ export default function App() {
         clearListeningHistory(to, trackingKey);
         if (existing.length) writeListeningHistory(to, trackingKey, existing);
         clearListeningHistory(from, trackingKey);
+        moveStored(from, to, engagementKey);
+        moveStored(from, to, rankerModelKey);
+        moveStored(from, to, impressionKey);
       }
       setListeningHistoryPersistent(persistent);
     },
-    [listeningHistoryPersistent, trackingKey],
+    [
+      engagementKey,
+      impressionKey,
+      listeningHistoryPersistent,
+      moveStored,
+      rankerModelKey,
+      trackingKey,
+    ],
   );
   const recordPlaybackEvent = useCallback(
     (event: ListeningEvent, storageKey: string) => {
@@ -1225,6 +1447,50 @@ export default function App() {
     },
     [listeningHistoryEnabled, listeningStorage, trackingKey],
   );
+  const recordEngagement = useCallback(
+    (input: EngagementEventInput) => {
+      if (!listeningHistoryEnabled || !engagementKey) return;
+      const event = createEngagementEvent(input);
+      const next = appendEngagement(listeningStorage, engagementKey, event);
+      setEngagementEvents(next);
+    },
+    [engagementKey, listeningHistoryEnabled, listeningStorage],
+  );
+  const learnFromOutcome = useCallback(
+    (target: RewardTarget, reward: number, at?: number) => {
+      if (!listeningHistoryEnabled || !impressionKey) return;
+      const attributed = attributeReward(
+        impressionsRef.current,
+        target,
+        reward,
+        at ?? Date.now(),
+      );
+      if (!attributed.examples.length) return;
+      impressionsRef.current = attributed.remaining;
+      writeImpressions(listeningStorage, impressionKey, attributed.remaining);
+      const trained = trainRanker(rankerModelRef.current, attributed.examples, 3);
+      rankerModelRef.current = trained;
+      writeRankerModel(listeningStorage, rankerModelKey, trained);
+      setRankerModel(trained);
+    },
+    [impressionKey, listeningHistoryEnabled, listeningStorage, rankerModelKey],
+  );
+  const resetLearning = useCallback(() => {
+    clearRankerState(listeningStorage, rankerModelKey, impressionKey);
+    clearEngagement(listeningStorage, engagementKey);
+    impressionsRef.current = [];
+    const fresh = emptyRankerModel();
+    rankerModelRef.current = fresh;
+    setRankerModel(fresh);
+    setEngagementEvents([]);
+    notify("Volta's learned profile has been reset.");
+  }, [
+    engagementKey,
+    impressionKey,
+    listeningStorage,
+    notify,
+    rankerModelKey,
+  ]);
   useEffect(() => {
     safeWrite(
       localStorage,
@@ -1241,16 +1507,69 @@ export default function App() {
         ? readListeningHistory(listeningStorage, trackingKey)
         : [],
     );
+    setEngagementEvents(
+      listeningHistoryEnabled ? readEngagement(listeningStorage, engagementKey) : [],
+    );
+    const model = listeningHistoryEnabled
+      ? readRankerModel(listeningStorage, rankerModelKey)
+      : emptyRankerModel();
+    rankerModelRef.current = model;
+    setRankerModel(model);
+    impressionsRef.current = listeningHistoryEnabled
+      ? readImpressions(listeningStorage, impressionKey)
+      : [];
+    rewardedEventIds.current.clear();
   }, [
+    engagementKey,
+    impressionKey,
     listeningHistoryEnabled,
     listeningHistoryPersistent,
     listeningStorage,
+    rankerModelKey,
     trackingKey,
   ]);
   const listeningProfile = useMemo(
     () => summarizeListening(listeningEvents),
     [listeningEvents],
   );
+  const engagementProfile = useMemo(
+    () => summarizeEngagement(engagementEvents),
+    [engagementEvents],
+  );
+  // Playback itself is the strongest implicit feedback. Fold new events into
+  // the local ranker so the shelf learns from what actually got listened to.
+  useEffect(() => {
+    if (!listeningHistoryEnabled || !impressionKey || !listeningEvents.length)
+      return;
+    const seen = rewardedEventIds.current;
+    const pending = listeningEvents.filter((event) => !seen.has(event.id));
+    if (!pending.length) return;
+    const cutoff = Date.now() - REWARD_WINDOW_MS;
+    pending.forEach((event) => {
+      seen.add(event.id);
+      // Anything older than the attribution window can no longer match a
+      // recommendation we showed, so skip it rather than replaying old days.
+      if (event.at < cutoff) return;
+      const reward = playbackReward(event);
+      if (!reward) return;
+      learnFromOutcome(
+        {
+          albumId: event.albumId,
+          artistId: event.artistId,
+          genres: (event.genre || "")
+            .split(/[,;|/]+/)
+            .map((genre) => genre.trim())
+            .filter(Boolean),
+        },
+        reward,
+        event.at,
+      );
+    });
+    if (seen.size > 3000) {
+      const recent = new Set(listeningEvents.slice(-1500).map((event) => event.id));
+      rewardedEventIds.current = recent;
+    }
+  }, [impressionKey, learnFromOutcome, listeningEvents, listeningHistoryEnabled]);
   const player = usePlayer(activeClient, notify, recordPlaybackEvent);
   const [history, setHistory] = useState<Route[]>([{ page: "home" }]);
   const route = history[history.length - 1];
@@ -1297,7 +1616,6 @@ export default function App() {
     null,
   );
   const [playlistMutationBusy, setPlaylistMutationBusy] = useState(false);
-  const [settings, setSettings] = useState(false);
   const [listeningHistoryOpen, setListeningHistoryOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [shortcutQuery, setShortcutQuery] = useState("");
@@ -1311,6 +1629,24 @@ export default function App() {
     () => safeRead(localStorage, "volta-theme") || "dark",
   );
   const [interfaceScale, setInterfaceScale] = useState(readInterfaceScale);
+  // Interface scaling zooms #root, so a slider inside that zoomed tree would
+  // resize and shift under the pointer while being dragged. Instead the user
+  // opens a preview: the draft scale is applied live, but the controls are
+  // portaled outside #root so they never change size, and the value is only
+  // persisted when the user confirms.
+  const [scalePreview, setScalePreview] = useState<number | null>(null);
+  const appliedInterfaceScale = scalePreview ?? interfaceScale;
+  const setPreviewInterfaceScale = useCallback((value: number) => {
+    setScalePreview(clampInterfaceScale(value));
+  }, []);
+  const adjustInterfaceScale = useCallback(
+    (delta: number) => {
+      setScalePreview((current) =>
+        clampInterfaceScale((current ?? interfaceScale) + delta),
+      );
+    },
+    [interfaceScale],
+  );
   const [floatingSidebar, setFloatingSidebar] = useState(
     () => safeRead(localStorage, "volta-floating-sidebar") !== "false",
   );
@@ -1344,6 +1680,9 @@ export default function App() {
   const [infinitePlayMode, setInfinitePlayMode] = useState<InfinitePlayMode>(
     () => (safeRead(localStorage, INFINITE_PLAY_MODE_KEY) === "random" ? "random" : "algorithm"),
   );
+  const [infinitePlayEnabled, setInfinitePlayEnabled] = useState(
+    () => safeRead(localStorage, INFINITE_PLAY_ENABLED_KEY) === "true",
+  );
   const [infinitePlayBusy, setInfinitePlayBusy] = useState(false);
   const [localMusic, setLocalMusic] = useState<LocalMusicLibrary | null>(null);
   const [localMusicBusy, setLocalMusicBusy] = useState(false);
@@ -1361,6 +1700,8 @@ export default function App() {
   const restoredLocalLibrary = useRef("");
   const restoredLocalDirectory = useRef(false);
   const autoOpenedLocalLibrary = useRef(false);
+  const infinitePlayAttempt = useRef("");
+  const infinitePlaySongIds = useRef(new Set<string>());
   const playbackSnapshot = useRef<{
     queue: Song[];
     currentIndex: number;
@@ -1422,10 +1763,12 @@ export default function App() {
   useLayoutEffect(() => {
     document.documentElement.style.setProperty(
       "--volta-interface-scale",
-      String(interfaceScale / 100),
+      String(appliedInterfaceScale / 100),
     );
-    safeWrite(localStorage, INTERFACE_SCALE_KEY, String(interfaceScale));
-  }, [interfaceScale]);
+    // A preview is temporary: only a committed value is written to storage.
+    if (scalePreview === null)
+      safeWrite(localStorage, INTERFACE_SCALE_KEY, String(interfaceScale));
+  }, [appliedInterfaceScale, interfaceScale, scalePreview]);
   useEffect(() => {
     safeWrite(localStorage, "volta-animated-artwork", String(animatedArtwork));
     safeWrite(
@@ -1465,7 +1808,8 @@ export default function App() {
   useEffect(() => {
     safeWrite(localStorage, INFINITE_PLAY_COUNT_KEY, String(infinitePlayCount));
     safeWrite(localStorage, INFINITE_PLAY_MODE_KEY, infinitePlayMode);
-  }, [infinitePlayCount, infinitePlayMode]);
+    safeWrite(localStorage, INFINITE_PLAY_ENABLED_KEY, String(infinitePlayEnabled));
+  }, [infinitePlayCount, infinitePlayEnabled, infinitePlayMode]);
   useEffect(() => {
     safeWrite(localStorage, SHORTCUT_STORAGE_KEY, JSON.stringify(shortcuts));
   }, [shortcuts]);
@@ -1676,6 +2020,33 @@ export default function App() {
     (next: Route, nextQuery?: string) => {
       setPending(true);
       setHistory((previous) => [...previous, next]);
+      if (next.id && next.page !== "search") {
+        if (next.page === "album") {
+          const entity: EngagementEntity = {
+            type: "album",
+            id: next.id,
+            name: next.title,
+          };
+          recordEngagement({ kind: "album-view", entity });
+          const recommended = recommendedAlbumIds.current.has(next.id);
+          if (recommended) {
+            recordEngagement({ kind: "recommendation-click", entity });
+            learnFromOutcome({ albumId: next.id }, 0.8);
+          } else {
+            learnFromOutcome({ albumId: next.id }, 0.3);
+          }
+        } else if (next.page === "artist") {
+          recordEngagement({
+            kind: "artist-view",
+            entity: { type: "artist", id: next.id, name: next.title },
+          });
+        } else if (next.page === "genre") {
+          recordEngagement({
+            kind: "genre-view",
+            entity: { type: "genre", id: next.id, name: next.title || next.id },
+          });
+        }
+      }
       if (client && privatePathNumber) {
         window.history.pushState(
           { voltaRoute: true },
@@ -1693,8 +2064,30 @@ export default function App() {
       setMobileSidebar(false);
       pageRef.current?.scrollTo({ top: 0 });
     },
-    [client, privatePathNumber, query, sourceMode],
+    [
+      client,
+      learnFromOutcome,
+      privatePathNumber,
+      query,
+      recordEngagement,
+      sourceMode,
+    ],
   );
+  const beginInterfaceScalePreview = useCallback(() => {
+    setScalePreview(interfaceScale);
+    // Land on Home so the preview starts from a normal view the user can browse.
+    navigate({ page: "home" });
+  }, [interfaceScale, navigate]);
+  const confirmInterfaceScalePreview = useCallback(() => {
+    if (scalePreview !== null) setInterfaceScale(scalePreview);
+    setScalePreview(null);
+    // Close the loop: the user started this from Settings.
+    navigate({ page: "settings" });
+  }, [navigate, scalePreview]);
+  const cancelInterfaceScalePreview = useCallback(() => {
+    setScalePreview(null);
+    navigate({ page: "settings" });
+  }, [navigate]);
   const applyLocalMusic = useCallback(
     (library: LocalMusicLibrary) => {
       localMusicGeneration.current++;
@@ -1705,7 +2098,6 @@ export default function App() {
         return library;
       });
       setLocalMusicError("");
-      setSettings(false);
       notify(
         library.tracks.length
           ? `Loaded ${library.tracks.length} tracks from ${library.directoryName}.`
@@ -1784,7 +2176,6 @@ export default function App() {
     setFavorites(readLocalFavorites());
     setPanel(null);
     setFullPlayer(false);
-    setSettings(false);
     setQuery("");
     setFilter("");
     pageMemory.current.clear();
@@ -2036,6 +2427,12 @@ export default function App() {
     player.stop();
     if (!listeningHistoryPersistent && trackingKey)
       clearListeningHistory(sessionStorage, trackingKey);
+    if (!listeningHistoryPersistent) {
+      if (engagementKey) clearEngagement(sessionStorage, engagementKey);
+      if (rankerModelKey || impressionKey)
+        clearRankerState(sessionStorage, rankerModelKey, impressionKey);
+      impressionsRef.current = [];
+    }
     setSourceMode("navidrome");
     setClient(null);
     setData(EMPTY);
@@ -2043,7 +2440,6 @@ export default function App() {
     setFavorites({});
     setPanel(null);
     setFullPlayer(false);
-    setSettings(false);
     setQuery("");
     setAccount({ server: "", username: "" });
     setPrivatePathNumber("");
@@ -2240,6 +2636,8 @@ export default function App() {
         }
         case "genre":
           return EMPTY;
+        case "settings":
+          return EMPTY;
       }
     };
     load()
@@ -2431,8 +2829,16 @@ export default function App() {
     [favorites],
   );
   const favorite = useCallback(async (song: Song) => {
+    const wasFavorite = isFavorite(song);
+    const noteFavorite = (active: boolean) => {
+      recordEngagement({
+        kind: active ? "favorite-add" : "favorite-remove",
+        entity: engagementEntityForSong(song),
+      });
+      // Saving a song is one of the strongest taste statements available.
+      learnFromOutcome(rewardTargetForSong(song), active ? 1 : -0.5);
+    };
     if (isLocalSong(song)) {
-      const wasFavorite = isFavorite(song);
       setFavorites((current) => {
         const next = { ...current, [song.id]: !wasFavorite };
         safeWrite(
@@ -2448,14 +2854,15 @@ export default function App() {
         );
         return next;
       });
+      noteFavorite(!wasFavorite);
       return;
     }
     if (!client || favoritePending.has(song.id)) return;
-    const wasFavorite = isFavorite(song);
     setFavoritePending((old) => new Set(old).add(song.id));
     try {
       await client.star(song, wasFavorite);
       setFavorites((old) => ({ ...old, [song.id]: !wasFavorite }));
+      noteFavorite(!wasFavorite);
     } catch {
       notify("Could not update this favorite. Try again.");
     } finally {
@@ -2465,7 +2872,14 @@ export default function App() {
         return next;
       });
     }
-  }, [client, favoritePending, isFavorite, notify]);
+  }, [
+    client,
+    favoritePending,
+    isFavorite,
+    learnFromOutcome,
+    notify,
+    recordEngagement,
+  ]);
   const refreshPlaylistNavigation = useCallback(async () => {
     if (!client || sourceMode === "local") return [];
     const playlists = await client.playlists();
@@ -2515,6 +2929,13 @@ export default function App() {
             ? `Added “${playlistDraft.song.title}” to a new playlist.`
             : "Playlist created.",
         );
+        if (playlistDraft.song) {
+          recordEngagement({
+            kind: "playlist-add",
+            entity: engagementEntityForSong(playlistDraft.song),
+          });
+          learnFromOutcome(rewardTargetForSong(playlistDraft.song), 0.9);
+        }
       }
       setPlaylistDraft(null);
     } catch (error) {
@@ -2528,10 +2949,12 @@ export default function App() {
     }
   }, [
     client,
+    learnFromOutcome,
     navigate,
     notify,
     playlistDraft,
     playlistMutationBusy,
+    recordEngagement,
     refreshPlaylistNavigation,
     requestRefresh,
     sourceMode,
@@ -2548,6 +2971,11 @@ export default function App() {
       invalidatePlaylistPage(playlist.id);
       if (route.page === "playlist" && route.id === playlist.id) requestRefresh();
       setPlaylistPickerSong(null);
+      recordEngagement({
+        kind: "playlist-add",
+        entity: engagementEntityForSong(song),
+      });
+      learnFromOutcome(rewardTargetForSong(song), 0.85);
       notify(`Added “${song.title}” to ${playlist.name}.`);
     } catch (error) {
       notify(
@@ -2562,7 +2990,9 @@ export default function App() {
     client,
     notify,
     invalidatePlaylistPage,
+    learnFromOutcome,
     playlistMutationBusy,
+    recordEngagement,
     refreshPlaylistNavigation,
     requestRefresh,
     route.id,
@@ -2634,22 +3064,37 @@ export default function App() {
   const playAlbum = useCallback(async (album: AlbumRecord) => {
     try {
       player.playSongs(await loadAlbumSongs(album));
+      recordEngagement({
+        kind: "album-play",
+        entity: engagementEntityForAlbum(album),
+      });
+      learnFromOutcome(rewardTargetForAlbum(album), 0.75);
     } catch {
       notify("This album could not be played. Try again.");
     }
-  }, [loadAlbumSongs, notify, player.playSongs]);
+  }, [learnFromOutcome, loadAlbumSongs, notify, player.playSongs, recordEngagement]);
   const shuffleAlbum = useCallback(async (album: AlbumRecord) => {
     try {
       player.playSongs(shuffleSongs(await loadAlbumSongs(album)));
+      recordEngagement({
+        kind: "album-shuffle",
+        entity: engagementEntityForAlbum(album),
+      });
+      learnFromOutcome(rewardTargetForAlbum(album), 0.55);
     } catch {
       notify("This album could not be played. Try again.");
     }
-  }, [loadAlbumSongs, notify, player.playSongs]);
+  }, [learnFromOutcome, loadAlbumSongs, notify, player.playSongs, recordEngagement]);
   const queueAlbum = useCallback(async (album: AlbumRecord, next = false) => {
     try {
       const songs = await loadAlbumSongs(album);
       for (const song of next ? [...songs].reverse() : songs)
         player.append(song, next);
+      recordEngagement({
+        kind: next ? "play-next" : "queue-add",
+        entity: engagementEntityForAlbum(album),
+      });
+      learnFromOutcome(rewardTargetForAlbum(album), next ? 0.45 : 0.3);
       notify(
         next
           ? `${albumName(album)} will play next.`
@@ -2658,19 +3103,69 @@ export default function App() {
     } catch {
       notify("This album could not be added to the queue. Try again.");
     }
-  }, [loadAlbumSongs, notify, player.append]);
+  }, [learnFromOutcome, loadAlbumSongs, notify, player.append, recordEngagement]);
+  const queueSong = useCallback(
+    (song: Song, next = false) => {
+      player.append(song, next);
+      recordEngagement({
+        kind: next ? "play-next" : "queue-add",
+        entity: engagementEntityForSong(song),
+      });
+      learnFromOutcome(rewardTargetForSong(song), next ? 0.45 : 0.3);
+    },
+    [learnFromOutcome, player.append, recordEngagement],
+  );
+  const notInterested = useCallback(
+    (target: { song?: Song; album?: AlbumRecord }) => {
+      const entity = target.song
+        ? engagementEntityForSong(target.song)
+        : target.album
+          ? engagementEntityForAlbum(target.album)
+          : undefined;
+      if (!entity) return;
+      recordEngagement({ kind: "dislike", entity });
+      learnFromOutcome(
+        target.song
+          ? rewardTargetForSong(target.song)
+          : rewardTargetForAlbum(target.album!),
+        -1,
+      );
+      notify("Got it — Volta will show less like this.");
+    },
+    [learnFromOutcome, notify, recordEngagement],
+  );
+  const setArtistMuted = useCallback(
+    (
+      artistId: string | undefined,
+      name: string | undefined,
+      muted: boolean,
+    ) => {
+      if (!artistId) return;
+      const entity: EngagementEntity = { type: "artist", id: artistId, name };
+      recordEngagement({
+        kind: muted ? "artist-mute" : "artist-unmute",
+        entity,
+      });
+      notify(
+        muted
+          ? `Muted ${name || "this artist"} in recommendations.`
+          : `Unmuted ${name || "this artist"}.`,
+      );
+    },
+    [notify, recordEngagement],
+  );
   const contextItems: ContextMenuItem[] = contextTarget
     ? contextTarget.type === "song"
       ? [
           {
             label: "Play Next",
             icon: <ListPlus size={16} />,
-            onSelect: () => player.append(contextTarget.item, true),
+            onSelect: () => queueSong(contextTarget.item, true),
           },
           {
             label: "Add to Queue",
             icon: <ListEnd size={16} />,
-            onSelect: () => player.append(contextTarget.item),
+            onSelect: () => queueSong(contextTarget.item),
           },
           { separator: true },
           ...(sourceMode === "navidrome"
@@ -2690,6 +3185,25 @@ export default function App() {
             icon: <Star size={16} />,
             onSelect: () => void favorite(contextTarget.item),
           },
+          {
+            label: "Not Interested",
+            icon: <ThumbsDown size={16} />,
+            onSelect: () => notInterested({ song: contextTarget.item }),
+          },
+          ...(contextTarget.item.artistId
+            ? [
+                {
+                  label: "Mute This Artist",
+                  icon: <Ban size={16} />,
+                  onSelect: () =>
+                    setArtistMuted(
+                      contextTarget.item.artistId,
+                      contextTarget.item.artist,
+                      true,
+                    ),
+                },
+              ]
+            : []),
           { separator: true },
           {
             label: "View Details",
@@ -2751,6 +3265,26 @@ export default function App() {
           },
           { separator: true },
           {
+            label: "Not Interested",
+            icon: <ThumbsDown size={16} />,
+            onSelect: () => notInterested({ album: contextTarget.item }),
+          },
+          ...(contextTarget.item.artistId
+            ? [
+                {
+                  label: "Mute This Artist",
+                  icon: <Ban size={16} />,
+                  onSelect: () =>
+                    setArtistMuted(
+                      contextTarget.item.artistId,
+                      contextTarget.item.artist,
+                      true,
+                    ),
+                },
+              ]
+            : []),
+          { separator: true },
+          {
             label: "View Details",
             icon: <Info size={16} />,
             onSelect: () => setDetailsAlbum(contextTarget.item),
@@ -2777,11 +3311,12 @@ export default function App() {
   const rememberSearch = useCallback((value: string) => {
     const next = value.trim();
     if (!next) return;
+    recordEngagement({ kind: "search", text: next });
     setSearchHistory((current) => [
       next,
       ...current.filter((item) => item.toLowerCase() !== next.toLowerCase()),
     ].slice(0, 8));
-  }, []);
+  }, [recordEngagement]);
   const focusSearchResult = (direction: 1 | -1) => {
     const results = [
       ...document.querySelectorAll<HTMLElement>(
@@ -2802,6 +3337,40 @@ export default function App() {
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
+      // Scale preview owns the resize keys so browsing the app stays usable.
+      if (scalePreview !== null) {
+        const step = event.shiftKey ? 10 : 1;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cancelInterfaceScalePreview();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          confirmInterfaceScalePreview();
+          return;
+        }
+        if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+          event.preventDefault();
+          adjustInterfaceScale(step);
+          return;
+        }
+        if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+          event.preventDefault();
+          adjustInterfaceScale(-step);
+          return;
+        }
+        if (event.key === "Home") {
+          event.preventDefault();
+          setPreviewInterfaceScale(70);
+          return;
+        }
+        if (event.key === "End") {
+          event.preventDefault();
+          setPreviewInterfaceScale(150);
+          return;
+        }
+      }
       if (
         target.closest(
           '[role="dialog"], [role="menu"]',
@@ -2931,10 +3500,9 @@ export default function App() {
           break;
         case "openSettings":
           setShortcutsOpen(false);
-          setSettings(true);
+          navigate({ page: "settings" });
           break;
         case "openShortcuts":
-          setSettings(false);
           setShortcutQuery("");
           setRecordingShortcut(null);
           setShortcutsOpen(true);
@@ -2944,7 +3512,6 @@ export default function App() {
           setPanel(null);
           setMobileSidebar(false);
           setContextTarget(null);
-          setSettings(false);
           setShortcutsOpen(false);
           setRecordingShortcut(null);
           break;
@@ -2953,13 +3520,18 @@ export default function App() {
     window.addEventListener("keydown", keyboard);
     return () => window.removeEventListener("keydown", keyboard);
   }, [
+    adjustInterfaceScale,
+    cancelInterfaceScalePreview,
     client,
     closeFullPlayer,
+    confirmInterfaceScalePreview,
     favorite,
     navigate,
     openFullPlayer,
     player,
     route.page,
+    scalePreview,
+    setPreviewInterfaceScale,
     shortcuts,
     showSearch,
   ]);
@@ -3084,7 +3656,51 @@ export default function App() {
       ),
     [data.frequent, filter],
   );
-  const recommendedAlbums = useMemo(() => {
+  const artistSeeds = useMemo(
+    () =>
+      topArtistSeeds(
+        { listeningProfile, engagementProfile, now: new Date() },
+        3,
+      ),
+    [engagementProfile, listeningProfile],
+  );
+  const artistSeedSignature = artistSeeds.join("|");
+  const [discoveryAlbums, setDiscoveryAlbums] = useState<AlbumRecord[]>([]);
+  const discoveryCache = useRef(new Map<string, AlbumRecord[]>());
+  // Fetch a little extra material from the artists this listener actually
+  // returns to. The server's generic random/recent lists rarely surface deep
+  // cuts, so personalization needs its own candidates to rank.
+  useEffect(() => {
+    if (sourceMode !== "navidrome" || !client || !artistSeeds.length) {
+      setDiscoveryAlbums([]);
+      return;
+    }
+    const cached = discoveryCache.current.get(artistSeedSignature);
+    if (cached) {
+      setDiscoveryAlbums(cached);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    void (async () => {
+      const results = await Promise.all(
+        artistSeeds.map((id) =>
+          client.artist(id, controller.signal).catch(() => null),
+        ),
+      );
+      const albums = mergeRecommendationCandidates(
+        ...results.map((artist) => artist?.album ?? []),
+      );
+      if (cancelled || !albums.length) return;
+      discoveryCache.current.set(artistSeedSignature, albums);
+      setDiscoveryAlbums(albums);
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [artistSeedSignature, artistSeeds, client, sourceMode]);
+  const recommendedResults = useMemo(() => {
     if (sourceMode !== "navidrome") return [];
     const excluded = new Set<string>(
       data.recentlyPlayed.slice(0, 2).map((album) => album.id),
@@ -3100,6 +3716,7 @@ export default function App() {
     });
     return rankAlbumRecommendations({
       candidates: data.recommendationCandidates,
+      discoveryCandidates: discoveryAlbums,
       recentlyPlayed: data.recentlyPlayed,
       frequentlyPlayed: data.frequent,
       recentlyAdded: data.recent,
@@ -3107,18 +3724,69 @@ export default function App() {
       contextSongs,
       excludeAlbumIds: excluded,
       listeningProfile,
+      engagementProfile,
+      rankerModel,
       limit: 8,
-    }).map((recommendation) => recommendation.album);
+    });
   }, [
     data.favoriteAlbumIds,
     data.frequent,
     data.recent,
     data.recentlyPlayed,
     data.recommendationCandidates,
+    discoveryAlbums,
+    engagementProfile,
     listeningProfile,
     player.currentIndex,
     player.queue,
+    rankerModel,
     sourceMode,
+  ]);
+  const recommendedAlbums = useMemo(
+    () => recommendedResults.map((recommendation) => recommendation.album),
+    [recommendedResults],
+  );
+  // Log the slate we actually showed, with its feature vectors, so later
+  // playback and engagement can teach the local ranker what worked.
+  useEffect(() => {
+    recommendedAlbumIds.current = new Set(
+      recommendedResults.map((recommendation) => recommendation.album.id),
+    );
+    if (!listeningHistoryEnabled || !impressionKey || !recommendedResults.length)
+      return;
+    const now = Date.now();
+    const bucket = Math.floor(now / (30 * 60 * 1000));
+    const impressions: PendingImpression[] = recommendedResults.map(
+      (recommendation, index) => ({
+        id: `${recommendation.album.id}:${bucket}`,
+        at: now,
+        albumId: recommendation.album.id.trim().toLowerCase(),
+        artistId: (
+          recommendation.album.artistId ||
+          recommendation.album.artist ||
+          ""
+        )
+          .trim()
+          .toLowerCase(),
+        genres: splitGenres(recommendation.album.genre).map((genre) =>
+          genre.toLowerCase(),
+        ),
+        features: recommendation.features,
+        position: index,
+      }),
+    );
+    impressionsRef.current = writeImpressions(
+      listeningStorage,
+      impressionKey,
+      [...impressionsRef.current, ...impressions.filter(
+        (item) => !impressionsRef.current.some((existing) => existing.id === item.id),
+      )],
+    );
+  }, [
+    impressionKey,
+    listeningHistoryEnabled,
+    listeningStorage,
+    recommendedResults,
   ]);
   const addInfinitePlay = useCallback(async () => {
     if (!client || sourceMode === "local" || infinitePlayBusy) return;
@@ -3133,13 +3801,27 @@ export default function App() {
         const details = await Promise.all(
           albums.map((album) => client.album(album.id).catch(() => null)),
         );
-        candidates = details.flatMap((album) => album?.song ?? []);
+        const albumSongs = details.map((album) => album?.song ?? []);
+        const seen = new Set<string>();
+        for (let offset = 0; candidates.length < infinitePlayCount; offset += 1) {
+          let addedThisRound = false;
+          for (const songs of albumSongs) {
+            const song = songs[offset % songs.length];
+            if (!song || seen.has(song.id) || existing.has(song.id)) continue;
+            seen.add(song.id);
+            candidates.push(song);
+            addedThisRound = true;
+            if (candidates.length >= infinitePlayCount) break;
+          }
+          if (!addedThisRound) break;
+        }
       }
       const additions = candidates
         .filter((song) => !existing.has(song.id))
         .slice(0, infinitePlayCount);
       additions.forEach((song) => {
         existing.add(song.id);
+        infinitePlaySongIds.current.add(song.id);
         player.append(song);
       });
       if (additions.length) {
@@ -3159,6 +3841,53 @@ export default function App() {
     infinitePlayMode,
     player,
     recommendedAlbums,
+    sourceMode,
+  ]);
+  const removeInfinitePlaySongs = useCallback(() => {
+    const ownedIds = infinitePlaySongIds.current;
+    if (!ownedIds.size) return;
+    player.queue
+      .map((song, index) =>
+        index > player.currentIndex && ownedIds.has(song.id) ? index : -1,
+      )
+      .filter((index) => index >= 0)
+      .reverse()
+      .forEach((index) => player.removeFromQueue(index));
+    ownedIds.clear();
+    infinitePlayAttempt.current = "";
+  }, [player]);
+  const toggleInfinitePlay = useCallback(() => {
+    setInfinitePlayEnabled((enabled) => {
+      const next = !enabled;
+      if (next) void addInfinitePlay();
+      else removeInfinitePlaySongs();
+      return next;
+    });
+  }, [addInfinitePlay, removeInfinitePlaySongs]);
+  useEffect(() => {
+    if (
+      !infinitePlayEnabled ||
+      !client ||
+      sourceMode === "local" ||
+      !player.currentSong
+    )
+      return;
+    const remaining = player.queue.length - player.currentIndex - 1;
+    if (remaining > 2) {
+      infinitePlayAttempt.current = "";
+      return;
+    }
+    const attemptKey = `${player.queue.length}:${player.currentIndex}`;
+    if (infinitePlayAttempt.current === attemptKey) return;
+    infinitePlayAttempt.current = attemptKey;
+    void addInfinitePlay();
+  }, [
+    addInfinitePlay,
+    client,
+    infinitePlayEnabled,
+    player.currentIndex,
+    player.currentSong,
+    player.queue.length,
     sourceMode,
   ]);
   const hasClientMore =
@@ -3263,7 +3992,7 @@ export default function App() {
       currentId={player.currentSong?.id}
       playing={player.playing}
       onPlay={playSongs}
-      onQueue={player.append}
+      onQueue={queueSong}
       onFavorite={favorite}
       isFavorite={isFavorite}
       onAlbum={openAlbumById}
@@ -3343,6 +4072,75 @@ export default function App() {
       route.title ||
       TITLES[route.page];
   const active = (page: Page) => (route.page === page ? "selected" : "");
+
+  // Portaled to <body> so it sits outside the zoomed #root subtree. That is what
+  // keeps the preview slider a fixed size no matter what scale is being applied.
+  const scalePreviewOverlay =
+    scalePreview === null
+      ? null
+      : createPortal(
+          <div
+            className="scale-preview"
+            role="region"
+            aria-label="Interface scale preview"
+          >
+            <div className="scale-preview-main">
+              <div className="scale-preview-head">
+                <span className="scale-preview-badge">Preview</span>
+                <output
+                  className="scale-preview-value"
+                  htmlFor="scale-preview-range"
+                >
+                  {scalePreview}%
+                </output>
+              </div>
+              <p className="scale-preview-hint">
+                Use ← and → (hold Shift for 10%) or drag the slider. Browse
+                around to see how it feels, then keep or cancel.
+              </p>
+              <div className="scale-preview-controls">
+                <button
+                  type="button"
+                  className="scale-preview-step"
+                  aria-label="Decrease interface scale"
+                  onClick={() => adjustInterfaceScale(-1)}
+                >
+                  −
+                </button>
+                <input
+                  id="scale-preview-range"
+                  className="scale-preview-slider"
+                  aria-label="Interface scale"
+                  type="range"
+                  min="70"
+                  max="150"
+                  step="1"
+                  value={scalePreview}
+                  onChange={(event) =>
+                    setPreviewInterfaceScale(Number(event.target.value))
+                  }
+                />
+                <button
+                  type="button"
+                  className="scale-preview-step"
+                  aria-label="Increase interface scale"
+                  onClick={() => adjustInterfaceScale(1)}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div className="scale-preview-actions">
+              <button className="secondary-button" onClick={cancelInterfaceScalePreview}>
+                Cancel
+              </button>
+              <button className="primary-button" onClick={confirmInterfaceScalePreview}>
+                Keep {scalePreview}%
+              </button>
+            </div>
+          </div>,
+          document.body,
+        );
 
   return (
     <ArtworkMotionProvider
@@ -3488,14 +4286,30 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <button className="account-button" onClick={() => setSettings(true)}>
+        <a
+          className="version-switch-link"
+          href={alternateVersionUrl}
+          target="_blank"
+          rel="opener"
+        >
+          Try the {isBetaHost ? "stable" : "beta"} version <span aria-hidden="true">→</span>
+        </a>
+        <button
+          className={"settings-button" + (route.page === "settings" ? " selected" : "")}
+          aria-current={route.page === "settings" ? "page" : undefined}
+          onClick={() => navigate({ page: "settings" })}
+        >
+          <Settings2 size={17} />
+          <span>Settings</span>
+          <ChevronRight size={15} className="settings-button-chevron" />
+        </button>
+        <div className="account-button">
           <CircleUserRound size={26} />
           <span>
             {account.username}
             <small>{sourceMode === "local" ? "This device" : "Navidrome"}</small>
           </span>
-          <Settings2 size={16} />
-        </button>
+        </div>
       </aside>
 
       <div className="workspace">
@@ -3514,50 +4328,54 @@ export default function App() {
             >
               <ChevronLeft size={22} />
             </IconButton>
-            <span>{isDetail ? title : "Your Library"}</span>
+            <span>{route.page === "settings" ? "Settings" : isDetail ? title : "Your Library"}</span>
           </div>
           <div className="toolbar-trailing">
-            {(["search", "genre"].includes(route.page)) ? (
+            {route.page === "settings" ? null : (
               <>
-                <label className="search-page-field">
-                  <Search size={16} />
-                  <input ref={searchRef} autoFocus={route.page === "search"} aria-label="Search library" placeholder="Search" value={query}
-                    onChange={(event) => route.page === "genre"
-                      ? navigate({ page: "search" }, event.target.value)
-                      : setQuery(event.target.value)}
-                    onBlur={() => rememberSearch(query)}
-                    onKeyDown={(event) => {
-                      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                        event.preventDefault();
-                        focusSearchResult(event.key === "ArrowDown" ? 1 : -1);
-                      } else if (event.key === "Enter") rememberSearch(query);
-                    }} />
-                </label>
-                <span className="scope-chip">Your Library</span>
+                {(["search", "genre"].includes(route.page)) ? (
+                  <>
+                    <label className="search-page-field">
+                      <Search size={16} />
+                      <input ref={searchRef} autoFocus={route.page === "search"} aria-label="Search library" placeholder="Search" value={query}
+                        onChange={(event) => route.page === "genre"
+                          ? navigate({ page: "search" }, event.target.value)
+                          : setQuery(event.target.value)}
+                        onBlur={() => rememberSearch(query)}
+                        onKeyDown={(event) => {
+                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                            event.preventDefault();
+                            focusSearchResult(event.key === "ArrowDown" ? 1 : -1);
+                          } else if (event.key === "Enter") rememberSearch(query);
+                        }} />
+                    </label>
+                    <span className="scope-chip">Your Library</span>
+                  </>
+                ) : (
+                  <label className="filter-field">
+                    <Search size={14} />
+                    <input
+                      ref={filterRef}
+                      aria-label="Filter this view"
+                      placeholder={
+                        isDetail
+                          ? "Find in " +
+                            (route.page === "playlist" ? "Playlist" : "Album")
+                          : "Filter"
+                      }
+                      value={filter}
+                      onChange={(event) => setFilter(event.target.value)}
+                    />
+                  </label>
+                )}
+                <IconButton
+                  label="Refresh view"
+                  onClick={requestRefresh}
+                >
+                  <RefreshCw size={16} />
+                </IconButton>
               </>
-            ) : (
-              <label className="filter-field">
-                <Search size={14} />
-                <input
-                  ref={filterRef}
-                  aria-label="Filter this view"
-                  placeholder={
-                    isDetail
-                      ? "Find in " +
-                        (route.page === "playlist" ? "Playlist" : "Album")
-                      : "Filter"
-                  }
-                  value={filter}
-                  onChange={(event) => setFilter(event.target.value)}
-                />
-              </label>
             )}
-            <IconButton
-              label="Refresh view"
-              onClick={requestRefresh}
-            >
-              <RefreshCw size={16} />
-            </IconButton>
           </div>
         </header>
         <main
@@ -3566,12 +4384,12 @@ export default function App() {
           id="main-content"
           aria-busy={pending}
         >
-          {pending && data !== EMPTY && (
+          {pending && data !== EMPTY && route.page !== "settings" && (
             <div className="view-refreshing" role="status" aria-label="Updating library">
               <LoaderCircle className="spin" size={15} />
             </div>
           )}
-          {pending && data === EMPTY && route.page !== "search" ? (
+          {pending && data === EMPTY && route.page !== "search" && route.page !== "settings" ? (
             <LoadingState />
           ) : pageError ? (
             <EmptyState title="Unable to load music" message={pageError}>
@@ -3584,7 +4402,7 @@ export default function App() {
             </EmptyState>
           ) : (
             <>
-              {!isDetail && !(route.page === "search" && !debouncedQuery) && (
+              {!isDetail && route.page !== "settings" && !(route.page === "search" && !debouncedQuery) && (
                 <div className="page-heading">
                   <h1>
                     {route.page === "search" && debouncedQuery
@@ -3615,6 +4433,370 @@ export default function App() {
                       New Playlist
                     </button>
                   )}
+                </div>
+              )}
+              {route.page === "settings" && (
+                <div className="settings-view">
+                  <header className="settings-hero">
+                    <div className="settings-hero-copy">
+                      <p className="settings-hero-kicker">Preferences</p>
+                      <h1>Settings</h1>
+                      <p>
+                        Tune how Volta looks, plays, and personalizes music for
+                        you. Everything below stays on this device.
+                      </p>
+                    </div>
+                    <div className="settings-hero-account">
+                      <CircleUserRound size={30} />
+                      <div>
+                        <b>{account.username}</b>
+                        <span>
+                          {sourceMode === "local" ? "This device" : account.server}
+                        </span>
+                      </div>
+                    </div>
+                  </header>
+
+                  <div className="settings-sections">
+                    <section className="settings-section">
+                      <div className="settings-section-heading">
+                        <h2>Appearance</h2>
+                        <p>Shape the look and motion of the player.</p>
+                      </div>
+                      <div className="settings-rows">
+                        <label className="setting-row setting-toggle">
+                          <span>
+                            <b>Theme</b>
+                            <small>Choose the color scheme</small>
+                          </span>
+                          <select
+                            aria-label="Theme"
+                            value={theme}
+                            onChange={(event) => setTheme(event.target.value)}
+                          >
+                            <option value="dark">Dark</option>
+                            <option value="light">Light</option>
+                            <option value="high-contrast">High contrast</option>
+                          </select>
+                        </label>
+                        <div className="setting-row setting-toggle">
+                          <span>
+                            <b>Floating sidebar</b>
+                            <small>Inset navigation with rounded corners</small>
+                          </span>
+                          <input
+                            aria-label="Floating sidebar"
+                            type="checkbox"
+                            checked={floatingSidebar}
+                            onChange={(event) => {
+                              setFloatingSidebar(event.target.checked);
+                              safeWrite(
+                                localStorage,
+                                "volta-floating-sidebar",
+                                String(event.target.checked),
+                              );
+                            }}
+                          />
+                        </div>
+                        <div className="setting-row setting-action-row">
+                          <span>
+                            <b>Interface scale</b>
+                            <small>
+                              Currently {interfaceScale}%. Open a full-screen
+                              preview to try a size before you keep it.
+                            </small>
+                          </span>
+                          <button
+                            className="secondary-button"
+                            onClick={beginInterfaceScalePreview}
+                          >
+                            <Eye size={15} />
+                            Preview scale
+                          </button>
+                        </div>
+                        <label className="setting-row setting-toggle">
+                          <span>
+                            <b>Animated artwork</b>
+                            <small>Choose where animated artwork is allowed to play</small>
+                          </span>
+                          <select
+                            aria-label="Animated artwork"
+                            value={
+                              !animatedArtwork
+                                ? "off"
+                                : animateArtworkEverywhere
+                                  ? "everywhere"
+                                  : "prominent"
+                            }
+                            onChange={(event) => {
+                              const mode = event.target.value;
+                              setAnimatedArtwork(mode !== "off");
+                              setAnimateArtworkEverywhere(mode === "everywhere");
+                            }}
+                          >
+                            <option value="prominent">Album and player views</option>
+                            <option value="everywhere">Everywhere</option>
+                            <option value="off">Off</option>
+                          </select>
+                        </label>
+                        <label className="setting-row setting-toggle">
+                          <span>
+                            <b>Experimental artwork loading</b>
+                            <small>Try aggressive artwork preloading</small>
+                          </span>
+                          <input
+                            aria-label="Experimental artwork loading"
+                            type="checkbox"
+                            checked={experimentalArtworkLoading}
+                            onChange={(event) =>
+                              setExperimentalArtworkLoading(event.target.checked)
+                            }
+                          />
+                        </label>
+                        <label className="setting-row setting-toggle">
+                          <span>
+                            <b>Refresh collection on Home visits</b>
+                            <small>Change “From Your Collection” every time Home opens</small>
+                          </span>
+                          <input
+                            aria-label="Refresh collection on Home visits"
+                            type="checkbox"
+                            checked={refreshCollectionOnVisit}
+                            onChange={(event) =>
+                              setRefreshCollectionOnVisit(event.target.checked)
+                            }
+                          />
+                        </label>
+                      </div>
+                    </section>
+
+                    <section className="settings-section">
+                      <div className="settings-section-heading">
+                        <h2>Playback</h2>
+                        <p>Streaming, queue behavior, and session handling.</p>
+                      </div>
+                      <div className="settings-rows">
+                        <label className="setting-row">
+                          <span>
+                            <b>Streaming quality</b>
+                            <small>
+                              Original sends the source file to your browser
+                            </small>
+                          </span>
+                          <select
+                            aria-label="Streaming quality"
+                            value={player.original ? "original" : "compatible"}
+                            onChange={(event) =>
+                              player.setOriginal(event.target.value === "original")
+                            }
+                          >
+                            <option value="original">Original · no transcoding</option>
+                            <option value="compatible">Compatible · MP3 320 kbps</option>
+                          </select>
+                        </label>
+                        <div className="setting-row setting-toggle">
+                          <span>
+                            <b>Infinite Play</b>
+                            <small>Keep the queue filled automatically as it gets low</small>
+                          </span>
+                          <input
+                            aria-label="Infinite Play"
+                            type="checkbox"
+                            checked={infinitePlayEnabled}
+                            disabled={infinitePlayBusy}
+                            onChange={toggleInfinitePlay}
+                          />
+                        </div>
+                        <div className="setting-row setting-toggle">
+                          <span>
+                            <b>Infinite Play songs</b>
+                            <small>Choose how many tracks are added from the floating bar</small>
+                          </span>
+                          <span className="setting-stepper" aria-label="Infinite Play song count">
+                            <button
+                              type="button"
+                              aria-label="Decrease Infinite Play song count"
+                              onClick={() =>
+                                setInfinitePlayCount((value) => Math.max(1, value - 1))
+                              }
+                            >
+                              −
+                            </button>
+                            <output>{infinitePlayCount}</output>
+                            <button
+                              type="button"
+                              aria-label="Increase Infinite Play song count"
+                              onClick={() =>
+                                setInfinitePlayCount((value) => Math.min(200, value + 1))
+                              }
+                            >
+                              +
+                            </button>
+                          </span>
+                        </div>
+                        <div className="setting-row setting-toggle">
+                          <span>
+                            <b>Infinite Play source</b>
+                            <small>Use your recommendations or choose songs randomly</small>
+                          </span>
+                          <select
+                            aria-label="Infinite Play source"
+                            value={infinitePlayMode}
+                            onChange={(event) =>
+                              setInfinitePlayMode(event.target.value as InfinitePlayMode)
+                            }
+                          >
+                            <option value="algorithm">Algorithm suggestions</option>
+                            <option value="random">Random songs</option>
+                          </select>
+                        </div>
+                        <label className="setting-row setting-toggle">
+                          <span>
+                            <b>Warn before leaving while playing</b>
+                            <small>Ask for confirmation before closing or leaving Volta</small>
+                          </span>
+                          <input
+                            aria-label="Warn before leaving while playing"
+                            type="checkbox"
+                            checked={warnBeforeLeave}
+                            onChange={(event) => setWarnBeforeLeave(event.target.checked)}
+                          />
+                        </label>
+                      </div>
+                    </section>
+
+                    <section className="settings-section">
+                      <div className="settings-section-heading">
+                        <h2>Privacy</h2>
+                        <p>
+                          What Volta is allowed to remember locally. Nothing is
+                          ever sent to Volta.
+                        </p>
+                      </div>
+                      <div className="settings-rows">
+                        <label className="setting-row setting-toggle">
+                          <span>
+                            <b>External lyrics lookup</b>
+                            <small>
+                              When your server has no lyrics, look up song metadata
+                              with LRCLIB.
+                            </small>
+                          </span>
+                          <input
+                            aria-label="External lyrics lookup"
+                            type="checkbox"
+                            checked={externalLyricsEnabled}
+                            onChange={(event) =>
+                              setExternalLyricsEnabled(event.target.checked)
+                            }
+                          />
+                        </label>
+                        <label className="setting-row setting-toggle">
+                          <span>
+                            <b>Personalized recommendations</b>
+                            <small>
+                              Keep local listening time, skips, favorites, searches,
+                              album views, and the learned model that ties them
+                              together.
+                            </small>
+                          </span>
+                          <input
+                            aria-label="Personalized recommendations"
+                            type="checkbox"
+                            checked={listeningHistoryEnabled}
+                            onChange={(event) =>
+                              setListeningHistoryEnabled(event.target.checked)
+                            }
+                          />
+                        </label>
+                        <div className="setting-row setting-action-row">
+                          <span>
+                            <b>Listening profile</b>
+                            <small>
+                              {listeningEvents.length} playback events ·{" "}
+                              {engagementEvents.length} interactions ·{" "}
+                              {rankerModel.samples} learning samples
+                            </small>
+                          </span>
+                          <div className="setting-action-buttons">
+                            <button
+                              className="secondary-button"
+                              onClick={() => setListeningHistoryOpen(true)}
+                            >
+                              View profile
+                            </button>
+                            <button
+                              className="secondary-button"
+                              disabled={
+                                !listeningEvents.length && !engagementEvents.length
+                              }
+                              onClick={() => {
+                                if (trackingKey) {
+                                  clearListeningHistory(localStorage, trackingKey);
+                                  clearListeningHistory(sessionStorage, trackingKey);
+                                }
+                                setListeningEvents([]);
+                                resetLearning();
+                                notify("Your local listening profile was cleared.");
+                              }}
+                            >
+                              Clear data
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="settings-section">
+                      <div className="settings-section-heading">
+                        <h2>Keyboard</h2>
+                        <p>Review and remap every command in Volta.</p>
+                      </div>
+                      <div className="settings-rows">
+                        <div className="setting-row setting-action-row">
+                          <span>
+                            <b>Keyboard shortcuts</b>
+                            <small>Search, review, and customize every command</small>
+                          </span>
+                          <button
+                            className="secondary-button"
+                            onClick={() => {
+                              setShortcutQuery("");
+                              setRecordingShortcut(null);
+                              setShortcutsOpen(true);
+                            }}
+                          >
+                            Open shortcuts
+                          </button>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="settings-section">
+                      <div className="settings-section-heading">
+                        <h2>{sourceMode === "local" ? "Session" : "Navidrome"}</h2>
+                        <p>The library Volta is currently connected to.</p>
+                      </div>
+                      <div className="settings-rows">
+                        <div className="setting-row settings-account-row">
+                          <span className="settings-account-identity">
+                            <CircleUserRound size={32} />
+                            <div>
+                              <b>{account.username}</b>
+                              <span>
+                                {sourceMode === "local"
+                                  ? "This device"
+                                  : account.server}
+                              </span>
+                            </div>
+                          </span>
+                          <button className="secondary-button" onClick={disconnect}>
+                            Disconnect
+                          </button>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
                 </div>
               )}
               {route.page === "home" && (
@@ -4084,6 +5266,7 @@ export default function App() {
         </main>
         {panel && (
           <Inspector
+            key={panel}
             panel={panel}
             client={client}
             player={player}
@@ -4097,7 +5280,8 @@ export default function App() {
           panel={panel}
           onPanel={(value) => setPanel((old) => (old === value ? null : value))}
           onExpand={openFullPlayer}
-          onInfinitePlay={addInfinitePlay}
+          infinitePlayEnabled={infinitePlayEnabled}
+          onToggleInfinitePlay={toggleInfinitePlay}
           infinitePlayBusy={infinitePlayBusy}
           onFavorite={favorite}
           favorite={player.currentSong ? isFavorite(player.currentSong) : false}
@@ -4399,278 +5583,6 @@ export default function App() {
         )}
       </Modal>
       <Modal
-        open={settings}
-        onClose={() => setSettings(false)}
-        title="Settings"
-      >
-        <div className="settings-content">
-          <h3>Appearance</h3>
-          <div className="setting-row setting-toggle">
-            <span>Theme</span>
-            <select
-              aria-label="Theme"
-              value={theme}
-              onChange={(event) => setTheme(event.target.value)}
-            >
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
-              <option value="high-contrast">High contrast</option>
-            </select>
-          </div>
-          <div className="setting-row setting-toggle">
-            <span>
-              <b>Floating sidebar</b>
-              <small>Inset navigation with rounded corners</small>
-            </span>
-            <input
-              aria-label="Floating sidebar"
-              type="checkbox"
-              checked={floatingSidebar}
-              onChange={(event) => {
-                setFloatingSidebar(event.target.checked);
-                safeWrite(localStorage, "volta-floating-sidebar", String(event.target.checked));
-              }}
-            />
-          </div>
-          <label className="setting-row setting-scale">
-            <span>
-              <b>Interface scale</b>
-              <small>Adjust the player from 70% to 150%</small>
-            </span>
-            <span className="setting-scale-control">
-              <output htmlFor="interface-scale">{interfaceScale}%</output>
-              <input
-                id="interface-scale"
-                aria-label="Interface scale"
-                type="range"
-                min="70"
-                max="150"
-                step="1"
-                value={interfaceScale}
-                onChange={(event) =>
-                  setInterfaceScale(clampInterfaceScale(Number(event.target.value)))
-                }
-              />
-            </span>
-          </label>
-          <label className="setting-row setting-toggle">
-            <span>
-              <b>Animated artwork</b>
-              <small>Choose where animated artwork is allowed to play</small>
-            </span>
-            <select
-              aria-label="Animated artwork"
-              value={
-                !animatedArtwork
-                  ? "off"
-                  : animateArtworkEverywhere
-                    ? "everywhere"
-                    : "prominent"
-              }
-              onChange={(event) => {
-                const mode = event.target.value;
-                setAnimatedArtwork(mode !== "off");
-                setAnimateArtworkEverywhere(mode === "everywhere");
-              }}
-            >
-              <option value="prominent">Album and player views</option>
-              <option value="everywhere">Everywhere</option>
-              <option value="off">Off</option>
-            </select>
-          </label>
-          <label className="setting-row setting-toggle">
-            <span>
-              <b>Experimental artwork loading</b>
-              <small>Try aggressive artwork preloading</small>
-            </span>
-            <input
-              aria-label="Experimental artwork loading"
-              type="checkbox"
-              checked={experimentalArtworkLoading}
-              onChange={(event) => setExperimentalArtworkLoading(event.target.checked)}
-            />
-          </label>
-          <label className="setting-row setting-toggle">
-            <span>
-              <b>Refresh collection on Home visits</b>
-              <small>Change “From Your Collection” every time Home opens</small>
-            </span>
-            <input
-              aria-label="Refresh collection on Home visits"
-              type="checkbox"
-              checked={refreshCollectionOnVisit}
-              onChange={(event) => setRefreshCollectionOnVisit(event.target.checked)}
-            />
-          </label>
-          <h3>Playback</h3>
-          <label className="setting-row">
-            <span>Streaming quality</span>
-            <select
-              aria-label="Streaming quality"
-              value={player.original ? "original" : "compatible"}
-              onChange={(event) =>
-                player.setOriginal(event.target.value === "original")
-              }
-            >
-              <option value="original">Original · no transcoding</option>
-              <option value="compatible">Compatible · MP3 320 kbps</option>
-            </select>
-          </label>
-          <p className="setting-description streaming-quality-description">
-            Original sends the source file to your browser. If playback falls
-            back to Compatible, the player shows the stream that is actually
-            playing. Output resolution depends on your device.
-          </p>
-          <div className="setting-row setting-toggle">
-            <span>
-              <b>Infinite Play songs</b>
-              <small>Choose how many tracks are added from the floating bar</small>
-            </span>
-            <span className="setting-stepper" aria-label="Infinite Play song count">
-              <button
-                type="button"
-                aria-label="Decrease Infinite Play song count"
-                onClick={() => setInfinitePlayCount((value) => Math.max(1, value - 1))}
-              >
-                −
-              </button>
-              <output>{infinitePlayCount}</output>
-              <button
-                type="button"
-                aria-label="Increase Infinite Play song count"
-                onClick={() => setInfinitePlayCount((value) => Math.min(200, value + 1))}
-              >
-                +
-              </button>
-            </span>
-          </div>
-          <div className="setting-row setting-toggle">
-            <span>
-              <b>Infinite Play source</b>
-              <small>Use your recommendations or choose songs randomly</small>
-            </span>
-            <select
-              aria-label="Infinite Play source"
-              value={infinitePlayMode}
-              onChange={(event) =>
-                setInfinitePlayMode(event.target.value as InfinitePlayMode)
-              }
-            >
-              <option value="algorithm">Algorithm suggestions</option>
-              <option value="random">Random songs</option>
-            </select>
-          </div>
-          <label className="setting-row setting-toggle">
-            <span>
-              <b>Warn before leaving while playing</b>
-              <small>Ask for confirmation before closing or leaving Volta</small>
-            </span>
-            <input
-              aria-label="Warn before leaving while playing"
-              type="checkbox"
-              checked={warnBeforeLeave}
-              onChange={(event) => setWarnBeforeLeave(event.target.checked)}
-            />
-          </label>
-          <h3>Privacy</h3>
-          <label className="setting-row setting-toggle">
-            <span>
-              <b>External lyrics lookup</b>
-              <small>
-                When your server has no lyrics, look up song metadata with
-                LRCLIB.
-              </small>
-            </span>
-            <input
-              aria-label="External lyrics lookup"
-              type="checkbox"
-              checked={externalLyricsEnabled}
-              onChange={(event) => setExternalLyricsEnabled(event.target.checked)}
-            />
-          </label>
-          <label className="setting-row setting-toggle">
-            <span>
-              <b>Personalized recommendations</b>
-              <small>
-                Keep local listening time, skips, replays, and context to improve
-                suggestions. It is never sent to Volta.
-              </small>
-            </span>
-            <input
-              aria-label="Personalized recommendations"
-              type="checkbox"
-              checked={listeningHistoryEnabled}
-              onChange={(event) =>
-                setListeningHistoryEnabled(event.target.checked)
-              }
-            />
-          </label>
-          <div className="setting-row setting-action-row">
-            <span>
-              <b>Listening profile</b>
-              <small>{listeningEvents.length} local events retained</small>
-            </span>
-            <div className="setting-action-buttons">
-              <button
-                className="secondary-button"
-                onClick={() => {
-                  setSettings(false);
-                  setListeningHistoryOpen(true);
-                }}
-              >
-                View history
-              </button>
-              <button
-                className="secondary-button"
-                disabled={!listeningEvents.length}
-                onClick={() => {
-                  if (trackingKey) {
-                    clearListeningHistory(localStorage, trackingKey);
-                    clearListeningHistory(sessionStorage, trackingKey);
-                  }
-                  setListeningEvents([]);
-                  notify("Your local listening profile was cleared.");
-                }}
-              >
-                Clear history
-              </button>
-            </div>
-          </div>
-          <h3>Keyboard</h3>
-          <div className="setting-row setting-action-row">
-            <span>
-              <b>Keyboard shortcuts</b>
-              <small>Search, review, and customize every command</small>
-            </span>
-            <button
-              className="secondary-button"
-              onClick={() => {
-                setSettings(false);
-                setShortcutQuery("");
-                setRecordingShortcut(null);
-                setShortcutsOpen(true);
-              }}
-            >
-              Open shortcuts
-            </button>
-          </div>
-          <h3>{sourceMode === "local" ? "Session" : "Navidrome"}</h3>
-          <div className="server-summary">
-            <CircleUserRound size={32} />
-            <div>
-              <b>{account.username}</b>
-              <span>{sourceMode === "local" ? "This device" : account.server}</span>
-            </div>
-          </div>
-          <button className="secondary-button" onClick={disconnect}>
-            Disconnect
-          </button>
-          <p className="setting-description">
-            Open the shortcut reference to see the complete keyboard map.
-          </p>
-        </div>
-      </Modal>
-      <Modal
         open={listeningHistoryOpen}
         onClose={() => setListeningHistoryOpen(false)}
         title="Listening history"
@@ -4679,9 +5591,13 @@ export default function App() {
         <ListeningHistoryView
           events={listeningEvents}
           profile={listeningProfile}
+          engagementEvents={engagementEvents}
+          engagementProfile={engagementProfile}
+          rankerModel={rankerModel}
           enabled={listeningHistoryEnabled}
           persistent={listeningHistoryPersistent}
           onPersistenceChange={changeListeningHistoryPersistence}
+          onResetLearning={resetLearning}
         />
       </Modal>
       <Modal
@@ -4781,6 +5697,7 @@ export default function App() {
         </div>
       )}
       </div>
+      {scalePreviewOverlay}
     </ArtworkMotionProvider>
   );
 }

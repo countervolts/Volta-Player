@@ -5,37 +5,73 @@ import {
   type ListeningProfile,
   type ListeningStats,
 } from "./listening-history";
+import {
+  coengagementSimilarity,
+  keywordAffinity,
+  normalizedAffinity,
+  normalizedGenreAffinity,
+  type EngagementProfile,
+  type FeatureVector,
+} from "./interactions";
+import { blendLearnedScore, type RankerModel } from "./learned-ranker";
 
 /**
  * A recommendation is deliberately explainable. The player does not have a
  * server-side model or a cross-user catalogue, so every score can be traced to
- * metadata and first-party listening signals available to the current user.
+ * metadata and first-party signals available to the current user.
+ *
+ * The ranker is a hybrid:
+ *  - server-ranked implicit feedback (recent / frequent) and explicit favorites
+ *  - first-party playback history (completion, replays, skips, session links)
+ *  - first-party engagement (views, queues, playlist adds, searches, dislikes)
+ *  - content metadata (artist, genre, era, track length)
+ *  - item-to-item similarity learned from this user's own sessions
+ *  - a locally trained logistic model that re-ranks on top of the priors
+ *  - bounded exploration plus an MMR-style diversity pass
  */
+export type RecommendationSignals = {
+  artist: number;
+  genre: number;
+  album: number;
+  recent: number;
+  frequent: number;
+  favorite: number;
+  context: number;
+  freshness: number;
+  exploration: number;
+  era: number;
+  history: number;
+  time: number;
+  transition: number;
+  duration: number;
+  skipPenalty: number;
+  engagement: number;
+  engagementArtist: number;
+  engagementGenre: number;
+  search: number;
+  aversion: number;
+  cooccurrence: number;
+  coengagement: number;
+  loyalty: number;
+  replay: number;
+  rediscovery: number;
+  novelty: number;
+  learned: number;
+};
+
 export type AlbumRecommendation = {
   album: AlbumRecord;
   score: number;
   reason: string;
-  signals: {
-    artist: number;
-    genre: number;
-    album: number;
-    recent: number;
-    frequent: number;
-    favorite: number;
-    context: number;
-    freshness: number;
-    exploration: number;
-    era: number;
-    history: number;
-    time: number;
-    transition: number;
-    duration: number;
-    skipPenalty: number;
-  };
+  signals: RecommendationSignals;
+  /** Feature vector used for local learning; mirrors the signals. */
+  features: FeatureVector;
 };
 
 export type AlbumRecommendationInput = {
   candidates: readonly AlbumRecord[];
+  /** Extra candidates fetched because of personalization (top artists, etc). */
+  discoveryCandidates?: readonly AlbumRecord[];
   recentlyPlayed?: readonly AlbumRecord[];
   frequentlyPlayed?: readonly AlbumRecord[];
   recentlyAdded?: readonly AlbumRecord[];
@@ -43,6 +79,8 @@ export type AlbumRecommendationInput = {
   contextSongs?: readonly Song[];
   excludeAlbumIds?: ReadonlySet<string>;
   listeningProfile?: ListeningProfile;
+  engagementProfile?: EngagementProfile;
+  rankerModel?: RankerModel;
   now?: Date;
   limit?: number;
 };
@@ -64,6 +102,13 @@ type AlbumProfile = {
 type ScoredAlbum = AlbumRecommendation & {
   artistKey: string;
   genreKeys: string[];
+};
+
+type TasteSeeds = {
+  albums: string[];
+  artists: string[];
+  genres: string[];
+  shuffleBias: number;
 };
 
 const normalize = (value?: string) =>
@@ -120,9 +165,7 @@ const statCompletion = (stats?: ListeningStats) =>
 const statAffinity = (stats: ListeningStats | undefined, now: Date) => {
   if (!stats || !stats.starts) return 0;
   const ageDays = Math.max(0, (now.getTime() - stats.lastPlayedAt) / 86_400_000);
-  const recency = stats.lastPlayedAt
-    ? Math.exp(-ageDays / 21)
-    : 0;
+  const recency = stats.lastPlayedAt ? Math.exp(-ageDays / 21) : 0;
   const volume = clamp(Math.log1p(stats.starts) / Math.log1p(12));
   const replay = clamp((stats.starts - 1) / 6);
   const skipPenalty = clamp(stats.earlySkips / Math.max(1, stats.starts));
@@ -188,6 +231,41 @@ const songArtistKey = (song: Song) =>
   normalize(song.artistId || song.albumArtist || song.artist);
 
 const songGenreKeys = (song: Song) => genreKeys(song.genre);
+
+const cosineSimilarity = (
+  map: Map<string, Map<string, number>> | undefined,
+  seed: string,
+  candidate: string,
+) => {
+  if (!map || !seed || !candidate || seed === candidate) return 0;
+  const row = map.get(seed);
+  const direct = row?.get(candidate) || 0;
+  if (!direct) return 0;
+  let seedTotal = 0;
+  for (const value of row?.values() || []) seedTotal += value;
+  let candidateTotal = 0;
+  for (const value of map.get(candidate)?.values() || []) candidateTotal += value;
+  const denominator = Math.sqrt(Math.max(1, seedTotal) * Math.max(1, candidateTotal));
+  return clamp(direct / denominator);
+};
+
+const bestCosine = (
+  map: Map<string, Map<string, number>> | undefined,
+  seeds: readonly string[],
+  candidate: string,
+) => {
+  if (!map || !seeds.length || !candidate) return 0;
+  let best = 0;
+  for (const seed of seeds) best = Math.max(best, cosineSimilarity(map, seed, candidate));
+  return best;
+};
+
+const topKeys = (map: Map<string, number>, limit: number) =>
+  [...map.entries()]
+    .filter(([, value]) => value > 0)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, limit)
+    .map(([key]) => key);
 
 const addAlbumSignal = (
   profile: AlbumProfile,
@@ -266,6 +344,64 @@ const buildProfile = (input: AlbumRecommendationInput): AlbumProfile => {
   return profile;
 };
 
+/**
+ * Pick the albums, artists, and genres that best summarize this listener, then
+ * use them as seeds for first-party item-to-item similarity.
+ */
+const buildSeeds = (
+  input: AlbumRecommendationInput,
+  profile: AlbumProfile,
+  now: Date,
+): TasteSeeds => {
+  const history = input.listeningProfile;
+  const engagement = input.engagementProfile;
+  const albumScores = new Map(profile.albums);
+  const artistScores = new Map(profile.artists);
+  const genreScores = new Map(profile.genres);
+
+  history?.albums.forEach((stats, id) => {
+    add(albumScores, id, statAffinity(stats, now) * 1.8);
+  });
+  history?.artists.forEach((stats, id) => {
+    add(artistScores, id, statAffinity(stats, now) * 1.8);
+  });
+  history?.genres.forEach((stats, id) => {
+    add(genreScores, id, statAffinity(stats, now) * 1.6);
+  });
+  const addNormalized = (
+    target: Map<string, number>,
+    source: Map<string, number> | undefined,
+    scale: number,
+  ) => {
+    if (!source?.size) return;
+    let maximum = 0;
+    for (const value of source.values()) maximum = Math.max(maximum, value);
+    if (maximum <= 0) return;
+    source.forEach((value, key) => {
+      if (!key) return;
+      add(target, key, (value / maximum) * scale + value * 0.05);
+    });
+  };
+  addNormalized(albumScores, engagement?.albumAffinity, 1.4);
+  addNormalized(artistScores, engagement?.artistAffinity, 1.4);
+  addNormalized(genreScores, engagement?.genreAffinity, 1.3);
+
+  let plays = 0;
+  let shuffles = 0;
+  engagement?.albums.forEach((stats) => {
+    plays += stats.albumPlays;
+    shuffles += stats.albumShuffles;
+  });
+  const shuffleTotal = plays + shuffles;
+
+  return {
+    albums: topKeys(albumScores, 14),
+    artists: topKeys(artistScores, 14),
+    genres: topKeys(genreScores, 12),
+    shuffleBias: shuffleTotal > 4 ? clamp(shuffles / shuffleTotal) : 0.35,
+  };
+};
+
 const mergeAlbums = (groups: readonly (readonly AlbumRecord[])[]) => {
   const albums = new Map<string, AlbumRecord>();
   for (const group of groups) {
@@ -299,17 +435,27 @@ const formatGenre = (album: AlbumRecord) => {
   return genre || "this sound";
 };
 
-const reasonFor = (item: ScoredAlbum) => {
+const reasonFor = (item: ScoredAlbum, seeds: TasteSeeds) => {
   const { album, signals } = item;
   const artist = album.artist?.trim() || "this artist";
   if (signals.favorite >= 1) return "Because you saved this album";
+  if (signals.engagement >= 0.6 && signals.engagementArtist >= 0.5)
+    return `You keep coming back to ${artist}`;
+  if (signals.engagement >= 0.55) return "From an album you engaged with";
   if (signals.context > 0.72 && item.artistKey) return `More from ${artist}`;
   if (signals.time > 0.72) return "A fit for your listening time";
+  if (signals.coengagement >= 0.5 || signals.cooccurrence >= 0.5)
+    return "Because it sits beside what you play";
+  if (signals.search >= 0.6) return "Matches what you have searched for";
+  if (signals.rediscovery >= 0.55) return "A favorite you have not visited in a while";
   if (signals.history > 0.72) return "From your listening history";
+  if (signals.replay >= 0.6) return `A ${artist} record you replay`;
   if (signals.frequent >= 0.58) return "From your heavy rotation";
   if (signals.recent >= 0.58) return "A familiar record you may want back";
   if (signals.genre >= 0.58) return `Because you play ${formatGenre(album)}`;
   if (signals.freshness >= 0.62) return "A new arrival in your collection";
+  if (signals.novelty >= 0.6 && seeds.genres.length)
+    return `A different corner of ${formatGenre(album)}`;
   return "A fresh turn from your collection";
 };
 
@@ -318,9 +464,11 @@ const reasonFor = (item: ScoredAlbum) => {
  *
  * This is intentionally a small hybrid recommender rather than a pretend ML
  * model. It combines server-ranked implicit feedback, explicit favorites,
- * content metadata, short-term queue context, deterministic exploration, and
- * a maximal-marginal-relevance-style diversity pass. The function is pure so
- * it can be evaluated cheaply with useMemo and tested independently of React.
+ * content metadata, short-term queue context, first-party engagement, learned
+ * item-to-item similarity, a locally trained re-ranker, deterministic
+ * exploration, and a maximal-marginal-relevance-style diversity pass. The
+ * function is pure so it can be evaluated cheaply with useMemo and tested
+ * independently of React.
  */
 export function rankAlbumRecommendations(
   input: AlbumRecommendationInput,
@@ -329,7 +477,9 @@ export function rankAlbumRecommendations(
   if (!limit || !input.candidates.length) return [];
   const now = input.now || new Date();
   const profile = buildProfile(input);
-  const excluded = input.excludeAlbumIds || new Set<string>();
+  const seeds = buildSeeds(input, profile, now);
+  const engagement = input.engagementProfile;
+  const excluded = new Set(input.excludeAlbumIds || []);
   const listeningProfile = input.listeningProfile;
   const hour = now.getHours();
   const weekday = now.getDay();
@@ -337,13 +487,21 @@ export function rankAlbumRecommendations(
   const currentAlbumId = input.contextSongs?.[0]?.albumId;
   const tasteYear =
     profile.yearWeight > 0 ? profile.yearTotal / profile.yearWeight : null;
+  const seedAlbums = seeds.albums.slice(0, 8);
+  const seedArtists = seeds.artists.slice(0, 8);
 
-  const scored: ScoredAlbum[] = mergeAlbums([input.candidates])
+  const scored: ScoredAlbum[] = mergeAlbums([
+    input.candidates,
+    input.discoveryCandidates || [],
+  ])
+    // An explicit artist mute is an instruction, not a hint. Muted artists only
+    // survive when there is literally nothing else to show (handled below).
     .filter((album) => !excluded.has(albumKey(album)))
     .map((album) => {
       const id = albumKey(album);
       const artist = artistKey(album);
       const genres = genreKeys(album.genre);
+      const muted = Boolean(engagement?.mutes.has(`artist:${artist}`));
       const artistAffinity = normalizedMapValue(profile.artists, artist);
       const genreAffinity = normalizedGenreValue(profile.genres, genres);
       const albumAffinity = normalizedMapValue(profile.albums, id);
@@ -354,113 +512,194 @@ export function rankAlbumRecommendations(
       const contextGenre = normalizedGenreValue(profile.contextGenres, genres);
       const context = Math.max(contextArtist, contextGenre);
       const favorite = profile.favoriteAlbumIds.has(id) || Boolean(album.starred) ? 1 : 0;
-      const history = statAffinity(listeningProfile?.albums.get(id), now);
-      const historyArtist = statAffinity(
-        listeningProfile?.artists.get(artist),
-        now,
-      );
+
+      const albumStats = listeningProfile?.albums.get(id);
+      const artistStats = listeningProfile?.artists.get(artist);
+      const history = statAffinity(albumStats, now);
+      const historyArtist = statAffinity(artistStats, now);
       const historyGenre = Math.max(
-        ...genres.map((genre) =>
-          statAffinity(listeningProfile?.genres.get(genre), now),
-        ),
+        ...genres.map((genre) => statAffinity(listeningProfile?.genres.get(genre), now)),
         0,
       );
       const historicalTaste = Math.max(history, historyArtist, historyGenre);
+
       const time = Math.max(
-        contextAffinity(
-          listeningProfile?.byDaypart.get(daypart),
-          "albums",
-          id,
-          now,
-        ),
-        contextAffinity(
-          listeningProfile?.byHour.get(hour),
-          "albums",
-          id,
-          now,
-        ) * 0.92,
-        contextAffinity(
-          listeningProfile?.byWeekday.get(weekday),
-          "albums",
-          id,
-          now,
-        ) * 0.78,
+        contextAffinity(listeningProfile?.byDaypart.get(daypart), "albums", id, now),
+        contextAffinity(listeningProfile?.byHour.get(hour), "albums", id, now) * 0.92,
+        contextAffinity(listeningProfile?.byWeekday.get(weekday), "albums", id, now) * 0.78,
       );
-      const transition = transitionAffinity(
-        listeningProfile,
-        currentAlbumId,
-        id,
-      );
+      const transition = transitionAffinity(listeningProfile, currentAlbumId, id);
+
       const candidateTrackSeconds =
-        album.duration && album.songCount
-          ? album.duration / album.songCount
-          : 0;
+        album.duration && album.songCount ? album.duration / album.songCount : 0;
       const duration =
         candidateTrackSeconds > 0 && listeningProfile?.averageTrackSeconds
           ? clamp(
               1 -
-                Math.abs(
-                  candidateTrackSeconds - listeningProfile.averageTrackSeconds,
-                ) / 120,
+                Math.abs(candidateTrackSeconds - listeningProfile.averageTrackSeconds) / 120,
             )
           : 0;
-      const skipStats = listeningProfile?.albums.get(id);
-      const skipPenalty = skipStats
-        ? clamp(skipStats.earlySkips / Math.max(1, skipStats.starts))
+      const skipPenalty = albumStats
+        ? clamp(albumStats.earlySkips / Math.max(1, albumStats.starts))
         : 0;
+      const artistSkipPenalty = artistStats
+        ? clamp(artistStats.earlySkips / Math.max(1, artistStats.starts))
+        : 0;
+
       const era =
         tasteYear !== null && Number.isFinite(album.year)
           ? clamp(1 - Math.abs(album.year! - tasteYear) / 28)
           : 0;
+
+      // Where in the session the user tends to abandon this artist/album.
+      const abandonment = Math.max(
+        albumStats?.averagePositionRatio || 0,
+        artistStats?.averagePositionRatio || 0,
+      );
+      const loyalty = clamp(
+        Math.max(
+          albumStats ? albumStats.distinctDays / 8 : 0,
+          artistStats ? artistStats.distinctDays / 12 : 0,
+        ),
+      );
+      const replay = artistStats
+        ? clamp((artistStats.starts - artistStats.sessions) / Math.max(1, artistStats.starts))
+        : 0;
+      const rediscovery = clamp(
+        (albumAffinity * 0.5 + recent * 0.5) * (recent > 0 && recent < 0.2 ? 1 : 0.35),
+      );
+
+      // Explicit engagement for this album, its artist, or its genres.
+      const engagementAlbum = normalizedAffinity(engagement?.albumAffinity, id);
+      const engagementArtist = normalizedAffinity(engagement?.artistAffinity, artist);
+      const engagementGenre = normalizedGenreAffinity(engagement?.genreAffinity, genres);
+      const engagementScore = Math.max(
+        engagementAlbum,
+        engagementArtist * 0.7,
+        engagementGenre * 0.5,
+      );
+      const aversion = Math.max(
+        normalizedAffinity(engagement?.albumAversion, id),
+        normalizedAffinity(engagement?.artistAversion, artist),
+        normalizedGenreAffinity(engagement?.genreAversion, genres),
+        skipPenalty * 0.5,
+        artistSkipPenalty * 0.4,
+        abandonment > 0.85 ? 0.35 : 0,
+      );
+      const search = keywordAffinity(
+        engagement,
+        `${album.name || album.title || ""} ${album.artist || ""} ${album.genre || ""}`,
+      );
+
+      const cooccurrence = bestCosine(
+        listeningProfile?.albumCooccurrence,
+        seedAlbums.filter((seed) => seed !== id),
+        id,
+      );
+      const coengagement = Math.max(
+        ...seedAlbums
+          .filter((seed) => seed !== id)
+          .map((seed) => coengagementSimilarity(engagement, seed, id)),
+        0,
+      );
+      const artistCooccurrence = bestCosine(
+        listeningProfile?.artistCooccurrence,
+        seedArtists.filter((seed) => seed !== artist),
+        artist,
+      );
+
       const familiarity = clamp(
-        artistAffinity * 0.44 + genreAffinity * 0.36 + albumAffinity * 0.2,
+        artistAffinity * 0.4 +
+          genreAffinity * 0.32 +
+          albumAffinity * 0.18 +
+          historicalTaste * 0.3 +
+          engagementScore * 0.25,
       );
-      const exploration = clamp(
-        (1 - familiarity) * 0.55 + stableRotation(id, now) * 0.45,
-      );
+      const novelty = clamp(1 - familiarity);
+      const exploration = clamp(novelty * 0.55 + stableRotation(id, now) * 0.45);
       const recentPenalty = recent * 0.17;
-      const score =
-        artistAffinity * 0.27 +
-        genreAffinity * 0.22 +
-        albumAffinity * 0.12 +
-        frequent * 0.13 +
-        recent * 0.08 +
-        favorite * 0.14 +
-        context * 0.12 +
-        freshness * 0.06 +
-        era * 0.04 +
-        exploration * 0.1 +
-        historicalTaste * 0.2 +
-        time * 0.12 +
-        transition * 0.1 +
-        duration * 0.025 -
+
+      const priorScore =
+        artistAffinity * 0.24 +
+        genreAffinity * 0.19 +
+        albumAffinity * 0.1 +
+        frequent * 0.1 +
+        recent * 0.06 +
+        favorite * 0.12 +
+        context * 0.11 +
+        freshness * 0.05 +
+        era * 0.03 +
+        exploration * 0.09 +
+        historicalTaste * 0.17 +
+        time * 0.1 +
+        transition * 0.08 +
+        duration * 0.03 +
+        engagementScore * 0.2 +
+        engagementArtist * 0.12 +
+        engagementGenre * 0.09 +
+        search * 0.07 +
+        cooccurrence * 0.14 +
+        coengagement * 0.12 +
+        artistCooccurrence * 0.08 +
+        loyalty * 0.06 +
+        replay * 0.05 +
+        rediscovery * 0.04 -
         recentPenalty -
-        skipPenalty * 0.16;
+        skipPenalty * 0.16 -
+        aversion * 0.3;
+
+      // A shuffle-heavy listener wants breadth; an album listener wants
+      // continuity. Nudge exploration in the direction they actually behave.
+      const discoveryBias =
+        seeds.shuffleBias * 0.05 * (0.4 + novelty) -
+        (1 - seeds.shuffleBias) * 0.02 * novelty;
+      // A muted artist is still shown if we have no other choice, but at a
+      // severe disadvantage so it only appears as a last resort.
+      const mutePenalty = muted ? 0.6 : 0;
+
+      const signals: RecommendationSignals = {
+        artist: artistAffinity,
+        genre: genreAffinity,
+        album: albumAffinity,
+        recent,
+        frequent,
+        favorite,
+        context,
+        freshness,
+        exploration,
+        era,
+        history: historicalTaste,
+        time,
+        transition,
+        duration,
+        skipPenalty,
+        engagement: engagementScore,
+        engagementArtist,
+        engagementGenre,
+        search,
+        aversion,
+        cooccurrence,
+        coengagement,
+        loyalty,
+        replay,
+        rediscovery,
+        novelty,
+        learned: 0,
+      };
+      const features: FeatureVector = signals;
+      const base = priorScore + discoveryBias - mutePenalty;
+      const learned = blendLearnedScore(base, input.rankerModel, features) - base;
+      signals.learned = learned;
       const item: ScoredAlbum = {
         album,
-        score,
+        score: base + learned,
         reason: "",
-        signals: {
-          artist: artistAffinity,
-          genre: genreAffinity,
-          album: albumAffinity,
-          recent,
-          frequent,
-          favorite,
-          context,
-          freshness,
-          exploration,
-          era,
-          history: historicalTaste,
-          time,
-          transition,
-          duration,
-          skipPenalty,
-        },
+        signals,
+        features,
         artistKey: artist,
         genreKeys: genres,
       };
-      item.reason = reasonFor(item);
+      item.reason = reasonFor(item, seeds);
       return item;
     });
 
@@ -496,7 +735,9 @@ export function rankAlbumRecommendations(
     artistCounts.set(best.artistKey, (artistCounts.get(best.artistKey) || 0) + 1);
   }
 
-  return selected.map(({ artistKey: _artistKey, genreKeys: _genreKeys, ...item }) => item);
+  return selected.map(
+    ({ artistKey: _artistKey, genreKeys: _genreKeys, ...item }) => item,
+  );
 }
 
 /** Merge server response groups while preserving the first-seen order. */
@@ -513,4 +754,38 @@ export function favoriteAlbumIdsFromSongs(songs: readonly Song[]) {
       .map((song) => song.albumId?.trim())
       .filter((id): id is string => Boolean(id)),
   );
+}
+
+/**
+ * The seed artist IDs the listener cares about most, best-first. Used by the
+ * app to fetch a little extra personalized discovery material (albums by these
+ * artists) that the server's generic lists would never surface.
+ */
+export function topArtistSeeds(
+  input: Pick<
+    AlbumRecommendationInput,
+    "listeningProfile" | "engagementProfile" | "now"
+  >,
+  limit = 3,
+): string[] {
+  const now = input.now || new Date();
+  const engagement = input.engagementProfile;
+  const scores = new Map<string, number>();
+  input.listeningProfile?.artists.forEach((stats, key) => {
+    // Artist IDs are opaque; normalized names may contain spaces. Only trust
+    // keys that look like server IDs so we never fetch on a name by mistake.
+    if (!key || key.includes(" ")) return;
+    add(scores, key, statAffinity(stats, now) * (1 + Math.log1p(stats.starts)));
+  });
+  if (engagement?.artistAffinity.size) {
+    let maximum = 0;
+    for (const value of engagement.artistAffinity.values())
+      maximum = Math.max(maximum, value);
+    if (maximum > 0)
+      engagement.artistAffinity.forEach((value, key) => {
+        if (!key || key.includes(" ")) return;
+        add(scores, key, (value / maximum) * 1.3 + value * 0.05);
+      });
+  }
+  return topKeys(scores, Math.max(0, Math.trunc(limit)));
 }
