@@ -23,6 +23,7 @@ import {
   EyeOff,
   FolderOpen,
   Grid2X2,
+  Github,
   Info,
   ListEnd,
   ListPlus,
@@ -4286,6 +4287,15 @@ export default function App() {
             </button>
           ))}
         </nav>
+        <a
+          className="sidebar-source-link"
+          href="https://github.com/countervolts/Volta-Player"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <Github size={13} aria-hidden="true" />
+          View source code <span aria-hidden="true">↗</span>
+        </a>
         <a
           className="version-switch-link"
           href={alternateVersionUrl}

@@ -2,7 +2,7 @@ node_modules/
 dist/
 docs/
 tests/
-scripts/
+scripts/sync-dev.sh
 playwright.config.ts
 test-results/
 playwright-report/
