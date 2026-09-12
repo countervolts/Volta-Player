@@ -252,7 +252,8 @@ export function PlaybackDock({
   panel,
   onPanel,
   onExpand,
-  onInfinitePlay,
+  infinitePlayEnabled,
+  onToggleInfinitePlay,
   infinitePlayBusy,
   onFavorite,
   favorite,
@@ -262,7 +263,8 @@ export function PlaybackDock({
   panel: "queue" | "lyrics" | null;
   onPanel: (panel: "queue" | "lyrics") => void;
   onExpand: () => void;
-  onInfinitePlay: () => void;
+  infinitePlayEnabled: boolean;
+  onToggleInfinitePlay: () => void;
   infinitePlayBusy: boolean;
   onFavorite: (song: Song) => void;
   favorite: boolean;
@@ -311,8 +313,10 @@ export function PlaybackDock({
       <div className="dock-actions">
         <IconButton
           label={infinitePlayBusy ? "Adding songs to queue" : "Infinite Play"}
+          active={infinitePlayEnabled}
+          aria-pressed={infinitePlayEnabled}
           disabled={infinitePlayBusy}
-          onClick={onInfinitePlay}
+          onClick={onToggleInfinitePlay}
         >
           <Infinity size={19} />
         </IconButton>

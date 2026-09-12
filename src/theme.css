@@ -727,11 +727,75 @@ p {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-top: 20px;
+  margin-top: 14px;
   padding: 10px 7px 2px;
   border-top: 1px solid var(--line);
   font-size: 12px;
   text-align: left;
+}
+.settings-button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin: 12px 0 0;
+  padding: 7px 9px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-button > svg:first-child {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  color: var(--accent);
+  stroke-width: 1.8;
+}
+.settings-button > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-button-chevron {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.settings-button:hover {
+  background: var(--hover);
+}
+.settings-button.selected {
+  background: var(--selection);
+}
+.settings-button.selected > span {
+  font-weight: 500;
+}
+.settings-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.version-switch-link {
+  display: block;
+  margin: 14px 7px -12px;
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: none;
+}
+.version-switch-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.version-switch-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 .account-button > span {
   flex: 1;
@@ -744,9 +808,6 @@ p {
   font-size: 10px;
   color: var(--muted);
   margin-top: 2px;
-}
-.account-button > svg:last-child {
-  color: var(--muted);
 }
 .workspace {
   position: relative;
@@ -1781,7 +1842,6 @@ p {
 .dock-volume .volume-slider {
   width: 56px;
 }
-.inspector-open .dock-volume input,
 .inspector-open .dock-actions > .icon-button:last-child {
   display: none;
 }
@@ -1795,6 +1855,20 @@ p {
   min-height: 0;
   border-left: 1px solid var(--line);
   background: var(--row);
+}
+.workspace > .inspector {
+  animation: inspector-in 180ms cubic-bezier(0.22, 0.8, 0.22, 1) both;
+  transform-origin: right center;
+}
+@keyframes inspector-in {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 .inspector-heading {
   flex-shrink: 0;
@@ -2100,11 +2174,265 @@ p {
   justify-content: flex-start;
   width: 100%;
 }
-.settings-content h3 {
-  margin: 22px 0 9px;
+/* Full-screen settings page */
+.settings-view {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  display: grid;
+  gap: 27px;
+}
+.settings-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 3px 2px 23px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-hero-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.settings-hero-kicker {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.settings-hero h1 {
+  margin: 0;
+  font-size: 31px;
+  font-weight: 700;
+  letter-spacing: -0.65px;
+  line-height: 1.2;
+}
+.settings-hero-copy > p:last-child {
+  margin: 0;
+  max-width: 58ch;
+  color: var(--secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.settings-hero-account {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  padding: 10px 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--canvas);
+}
+.settings-hero-account > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.settings-hero-account > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.settings-hero-account b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.settings-hero-account span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.settings-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(330px, 100%), 1fr));
+  align-items: start;
+  gap: 24px 26px;
+}
+.settings-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.settings-section-heading {
+  display: grid;
+  gap: 3px;
+}
+.settings-section-heading h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-section-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.settings-rows {
+  display: grid;
+  gap: 8px;
+}
+.settings-rows .setting-row + .setting-row {
+  margin-top: 0;
+}
+.settings-rows .setting-row {
+  min-height: 54px;
+}
+.settings-rows .setting-row > span:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.settings-rows .setting-row b {
+  font-weight: 500;
+}
+.settings-rows .setting-row small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.settings-account-row {
+  justify-content: space-between;
+}
+.settings-rows .setting-row > span.settings-account-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.settings-account-identity > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.settings-account-identity > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.settings-account-identity b {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.settings-account-identity span {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+/* Interface scale preview. Rendered outside the zoomed #root subtree so the
+   controls keep a constant size regardless of the scale being previewed. */
+.scale-preview {
+  position: fixed;
+  z-index: 60;
+  top: max(14px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: min(620px, calc(100vw - 24px));
+  padding: 13px 15px;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: 0 14px 38px #00000059;
+  backdrop-filter: blur(14px);
+}
+.scale-preview-main {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+}
+.scale-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.scale-preview-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--selection);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.scale-preview-value {
+  color: var(--text);
   font-size: 12px;
   font-weight: 600;
-  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+}
+.scale-preview-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.scale-preview-controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.scale-preview-step {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.scale-preview-step:hover {
+  background: var(--hover);
+}
+.scale-preview-slider {
+  flex: 1;
+  min-width: 0;
+}
+.scale-preview-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+.scale-preview-actions .secondary-button,
+.scale-preview-actions .primary-button {
+  padding-inline: 13px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+/* Keep the confirm button a fixed width so its "Keep N%" label changing with
+   the value cannot resize the slider next to it during a preview. */
+.scale-preview-actions .primary-button {
+  min-width: 106px;
+  justify-content: center;
+}
+@media (max-width: 640px) {
+  .scale-preview {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 11px;
+  }
+  .scale-preview-actions {
+    justify-content: flex-end;
+  }
 }
 .setting-row {
   display: flex;
@@ -2161,34 +2489,6 @@ p {
   border-left: 1px solid var(--line);
   color: var(--text);
   font-size: 11px;
-}
-.setting-scale-control {
-  display: grid;
-  grid-template-columns: 42px minmax(100px, 150px);
-  align-items: center;
-  gap: 10px;
-  flex: 0 1 202px;
-}
-.setting-scale > span:first-child {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-.setting-scale b {
-  font-weight: 500;
-}
-.setting-scale small {
-  color: var(--muted);
-  font-size: 11px;
-}
-.setting-scale-control output {
-  color: var(--secondary);
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  text-align: right;
-}
-.setting-scale-control input[type="range"] {
-  width: 100%;
 }
 .setting-toggle {
   align-items: center;
@@ -2287,7 +2587,7 @@ p {
 }
 .listening-history-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 .listening-history-stats > div {
@@ -2334,6 +2634,10 @@ p {
 }
 .listening-history-method li::marker {
   color: var(--muted);
+}
+.listening-history-method .secondary-button {
+  justify-self: start;
+  margin-top: 2px;
 }
 .listening-history-activity {
   display: grid;
@@ -2560,29 +2864,6 @@ p {
 .shortcut-empty p {
   margin: 0;
   font-size: 12px;
-}
-.server-summary {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 18px;
-  padding: 12px;
-  background: var(--canvas);
-  border-radius: 7px;
-}
-.server-summary div {
-  min-width: 0;
-}
-.server-summary b,
-.server-summary span {
-  display: block;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.server-summary span {
-  margin-top: 4px;
-  color: var(--secondary);
-  font-size: 11px;
 }
 .context-menu {
   z-index: 40;
@@ -3231,6 +3512,9 @@ p {
   .dock-volume input {
     display: none;
   }
+  .inspector-open .dock-volume input {
+    display: block;
+  }
   .inspector-open .dock-actions > .icon-button:first-child,
   .inspector-open .dock-now-playing > .icon-button,
   .inspector-open .transport-controls > .icon-button:first-child,
@@ -3655,10 +3939,6 @@ p {
   }
   .listening-history-event-meta small {
     grid-column: auto;
-  }
-  .setting-scale-control {
-    width: 100%;
-    flex-basis: auto;
   }
   .shortcut-manager-toolbar {
     align-items: stretch;

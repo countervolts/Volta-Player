@@ -82,6 +82,12 @@ export type ListeningStats = {
   lastPlayedAt: number;
   firstPlayedAt: number;
   sessions: number;
+  /** Number of distinct calendar days this entity was heard on. */
+  distinctDays: number;
+  /** Average fraction of the track heard before a skip/complete/stop. */
+  averagePositionRatio: number;
+  positionRatioTotal: number;
+  positionRatioSamples: number;
 };
 
 export type ListeningContext = {
@@ -103,6 +109,14 @@ export type ListeningProfile = {
   byWeekday: Map<number, ListeningContext>;
   songTransitions: Map<string, Map<string, number>>;
   albumTransitions: Map<string, Map<string, number>>;
+  /** Item-to-item co-listening within a session (both directions). */
+  songCooccurrence: Map<string, Map<string, number>>;
+  albumCooccurrence: Map<string, Map<string, number>>;
+  artistCooccurrence: Map<string, Map<string, number>>;
+  genreCooccurrence: Map<string, Map<string, number>>;
+  /** Audible seconds per local hour (0-23) and weekday (0-6). */
+  hourHistogram: number[];
+  weekdayHistogram: number[];
   averageTrackSeconds: number;
   averageCompletionRatio: number;
 };
@@ -316,6 +330,10 @@ const emptyStats = (): ListeningStats => ({
   lastPlayedAt: 0,
   firstPlayedAt: Number.POSITIVE_INFINITY,
   sessions: 0,
+  distinctDays: 0,
+  averagePositionRatio: 0,
+  positionRatioTotal: 0,
+  positionRatioSamples: 0,
 });
 
 const context = (): ListeningContext => ({
@@ -346,6 +364,7 @@ const updateStats = (
   stats: ListeningStats,
   event: ListeningEvent,
   sessions: Map<ListeningStats, Set<string>>,
+  days: Map<ListeningStats, Set<string>>,
 ) => {
   if (event.kind === "start") stats.starts += 1;
   if (event.kind === "resume") stats.resumes += 1;
@@ -363,6 +382,12 @@ const updateStats = (
   if (["skip", "complete", "stop"].includes(event.kind)) {
     stats.completionRatioTotal += event.completionRatio;
     stats.completionSamples += 1;
+    if (event.durationSeconds > 0) {
+      stats.positionRatioTotal += clamp(
+        event.positionSeconds / event.durationSeconds,
+      );
+      stats.positionRatioSamples += 1;
+    }
     if (event.kind === "skip") {
       if (event.completionRatio < 0.35) stats.earlySkips += 1;
       else stats.lateSkips += 1;
@@ -378,12 +403,19 @@ const updateStats = (
     sessions.set(stats, ids);
   }
   ids.add(event.sessionId);
+  let daySet = days.get(stats);
+  if (!daySet) {
+    daySet = new Set();
+    days.set(stats, daySet);
+  }
+  daySet.add(new Date(event.at).toISOString().slice(0, 10));
 };
 
 const updateContext = (
   target: ListeningContext,
   event: ListeningEvent,
   sessions: Map<ListeningStats, Set<string>>,
+  days: Map<ListeningStats, Set<string>>,
 ) => {
   const song = statsFor(target.songs, event.songId);
   const album = event.albumId
@@ -397,12 +429,12 @@ const updateContext = (
     .split(/[,;|/]+/)
     .map(entityKey)
     .filter(Boolean);
-  if (song) updateStats(song, event, sessions);
-  if (album) updateStats(album, event, sessions);
-  if (artistStats) updateStats(artistStats, event, sessions);
+  if (song) updateStats(song, event, sessions, days);
+  if (album) updateStats(album, event, sessions, days);
+  if (artistStats) updateStats(artistStats, event, sessions, days);
   genres.forEach((genre) => {
     const genreStats = statsFor(target.genres, genre);
-    if (genreStats) updateStats(genreStats, event, sessions);
+    if (genreStats) updateStats(genreStats, event, sessions, days);
   });
 };
 
@@ -415,6 +447,21 @@ const addTransition = (
   const next = transitions.get(from) || new Map<string, number>();
   next.set(to, (next.get(to) || 0) + 1);
   transitions.set(from, next);
+};
+
+const addCooccurrence = (
+  map: Map<string, Map<string, number>>,
+  left: string | undefined,
+  right: string | undefined,
+  weight: number,
+) => {
+  if (!left || !right || left === right || weight <= 0) return;
+  const forward = map.get(left) || new Map<string, number>();
+  forward.set(right, (forward.get(right) || 0) + weight);
+  map.set(left, forward);
+  const backward = map.get(right) || new Map<string, number>();
+  backward.set(left, (backward.get(left) || 0) + weight);
+  map.set(right, backward);
 };
 
 export function summarizeListening(
@@ -432,10 +479,17 @@ export function summarizeListening(
     byWeekday: new Map(),
     songTransitions: new Map(),
     albumTransitions: new Map(),
+    songCooccurrence: new Map(),
+    albumCooccurrence: new Map(),
+    artistCooccurrence: new Map(),
+    genreCooccurrence: new Map(),
+    hourHistogram: new Array(24).fill(0),
+    weekdayHistogram: new Array(7).fill(0),
     averageTrackSeconds: 0,
     averageCompletionRatio: 0,
   };
   const sessions = new Map<ListeningStats, Set<string>>();
+  const days = new Map<ListeningStats, Set<string>>();
   let durationTotal = 0;
   let durationSamples = 0;
   let completionTotal = 0;
@@ -451,10 +505,24 @@ export function summarizeListening(
       },
       event,
       sessions,
+      days,
     );
-    updateContext(contextMapValue(profile.byDaypart, event.daypart), event, sessions);
-    updateContext(contextMapValue(profile.byHour, event.hour), event, sessions);
-    updateContext(contextMapValue(profile.byWeekday, event.weekday), event, sessions);
+    updateContext(
+      contextMapValue(profile.byDaypart, event.daypart),
+      event,
+      sessions,
+      days,
+    );
+    updateContext(contextMapValue(profile.byHour, event.hour), event, sessions, days);
+    updateContext(
+      contextMapValue(profile.byWeekday, event.weekday),
+      event,
+      sessions,
+      days,
+    );
+    const audible = Math.max(0, event.deltaSeconds);
+    profile.hourHistogram[event.hour] += audible;
+    profile.weekdayHistogram[event.weekday] += audible;
     if (event.kind === "start" && event.durationSeconds > 0) {
       durationTotal += event.durationSeconds;
       durationSamples += 1;
@@ -472,6 +540,7 @@ export function summarizeListening(
     string,
     { songId: string; albumId?: string; at: number }
   >();
+  const bySession = new Map<string, ListeningEvent[]>();
   starts.forEach((event) => {
     const previous = previousBySession.get(event.sessionId);
     if (previous && event.at - previous.at <= SESSION_GAP_MS) {
@@ -483,12 +552,60 @@ export function summarizeListening(
       albumId: event.albumId,
       at: event.at,
     });
+    const bucket = bySession.get(event.sessionId) || [];
+    bucket.push(event);
+    bySession.set(event.sessionId, bucket);
   });
+
+  // Within-session co-listening is a stronger similarity signal than strict
+  // adjacency: it survives shuffled queues and one-off track skips. Each pair
+  // is weighted down by how far apart it sat in the session.
+  for (const bucket of bySession.values()) {
+    const albums = new Map<string, number>();
+    const artists = new Map<string, number>();
+    const genres = new Map<string, number>();
+    const songs = new Map<string, number>();
+    bucket.forEach((event, index) => {
+      const weight = 1 / (1 + index * 0.08);
+      if (event.albumId) albums.set(event.albumId, Math.max(albums.get(event.albumId) || 0, weight));
+      const artist = entityKey(event.artistId || event.artist);
+      if (artist) artists.set(artist, Math.max(artists.get(artist) || 0, weight));
+      if (event.songId) songs.set(event.songId, Math.max(songs.get(event.songId) || 0, weight));
+      (event.genre || "")
+        .split(/[,;|/]+/)
+        .map(entityKey)
+        .filter(Boolean)
+        .forEach((genre) => genres.set(genre, Math.max(genres.get(genre) || 0, weight)));
+    });
+    const pair = (
+      map: Map<string, Map<string, number>>,
+      entries: Map<string, number>,
+    ) => {
+      const list = [...entries.entries()];
+      for (let left = 0; left < list.length; left++) {
+        for (let right = left + 1; right < list.length; right++) {
+          addCooccurrence(map, list[left][0], list[right][0], list[left][1] * list[right][1]);
+        }
+      }
+    };
+    pair(profile.albumCooccurrence, albums);
+    pair(profile.artistCooccurrence, artists);
+    pair(profile.genreCooccurrence, genres);
+    pair(profile.songCooccurrence, songs);
+  }
 
   sessions.forEach((ids, stats) => {
     stats.sessions = ids.size;
     if (!Number.isFinite(stats.firstPlayedAt)) stats.firstPlayedAt = 0;
   });
+  days.forEach((dates, stats) => {
+    stats.distinctDays = dates.size;
+  });
+  for (const stats of sessions.keys()) {
+    stats.averagePositionRatio = stats.positionRatioSamples
+      ? stats.positionRatioTotal / stats.positionRatioSamples
+      : 0;
+  }
   profile.averageTrackSeconds = durationSamples
     ? durationTotal / durationSamples
     : 0;
