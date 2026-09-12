@@ -1,0 +1,15 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+.git/
+.gitignore
+.dockerignore
+docs/
+tests/
+playwright.config.ts
+coverage/
+*.log
+.env
+.env.*
+!.env.example

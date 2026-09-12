@@ -1,0 +1,14 @@
+services:
+  volta-dev:
+    image: node:22-alpine
+    restart: unless-stopped
+    network_mode: host
+    working_dir: /app
+    volumes:
+      - ..:/app
+      - volta-dev-node-modules:/app/node_modules
+    command: >-
+      sh -lc "npm ci && npm run dev -- --mode remote --host 127.0.0.1 --port 8082"
+
+volumes:
+  volta-dev-node-modules:
