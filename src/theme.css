@@ -781,16 +781,40 @@ p {
   outline-offset: -1px;
 }
 .version-switch-link {
-  display: block;
-  margin: 14px 7px -12px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 5px 7px -12px;
   color: var(--muted);
   font-size: 11px;
   text-decoration: none;
 }
+.sidebar-source-link {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 14px 7px 0;
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: none;
+}
+.sidebar-source-link > svg {
+  flex-shrink: 0;
+}
+.sidebar-source-link > span,
+.version-switch-link > span {
+  color: var(--secondary);
+}
+.sidebar-source-link:hover,
 .version-switch-link:hover {
   color: var(--text);
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+.sidebar-source-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 .version-switch-link:focus-visible {
   outline: 2px solid var(--accent);
