@@ -1,9 +1,3 @@
-// Extracts a small, stable color palette from album artwork so the full-screen
-// player can build an animated background derived from the current cover.
-//
-// The result is intentionally tiny (a handful of hex colors) and cached by
-// source URL. Decoding happens once per artwork and never blocks playback.
-
 export type ArtworkPalette = {
   /** Dominant, most saturated color. Drives the primary glow. */
   primary: string;
@@ -14,7 +8,7 @@ export type ArtworkPalette = {
   /** Average luminance of the artwork, 0 (black) to 1 (white). */
   luminance: number;
   /**
-   * Six vivid, visually distinct dominant colors. Apple Music's full-screen
+   * Six vivid, visually distinct dominant colors. Our full-screen
    * background is a mesh gradient driven by a set of dominant artwork colors
    * rather than a blurred copy of the cover, so these feed the animated mesh.
    */
@@ -323,9 +317,9 @@ function buildPalette(pixels: Uint8ClampedArray): ArtworkPalette {
   const neutral = [...described].sort((a, b) => b.count - a.count);
 
   if (!chromatic.length) {
-    // Truly monochrome artwork (for example a black-and-white cover). Apple
-    // renders these as a near-black backdrop with only subtle tonal variation,
-    // so the greys are scaled well down rather than spanning the full range.
+    // Truly monochrome artwork (for example a black-and-white cover) reads
+    // here as a near-black backdrop with only subtle tonal variation, so the
+    // greys are scaled well down rather than spanning the full range.
     const darkest = neutral[neutral.length - 1];
     const grey = (l: number) => {
       const rgb = hslToRgb(0, 0, clamp(l, 0.02, 0.5));
@@ -378,7 +372,7 @@ function buildPalette(pixels: Uint8ClampedArray): ArtworkPalette {
     return toHex(rgb.r, rgb.g, rgb.b);
   };
   const dh = dominantHue;
-  // Apple's full-screen background is markedly darker and calmer than the
+  // Full-screen background is markedly darker and calmer than the
   // artwork itself: the cover stays the brightest object on screen and the
   // backdrop reads as a deep tint of it. Saturation is kept close to the
   // artwork's own so a brown album does not become neon orange.

@@ -92,6 +92,7 @@ type ParsedMetadata = {
   title?: string;
   artist?: string;
   albumArtist?: string;
+  composer?: string;
   album?: string;
   track?: number;
   discNumber?: number;
@@ -155,8 +156,15 @@ const metadataField = (metadata: ParsedMetadata, key: string, value: string) => 
   const clean = cleanText(value);
   if (!clean) return;
   if (key === "title") metadata.title = clean;
-  else if (key === "artist") metadata.artist = clean;
+  else if (key === "artist")
+    metadata.artist = metadata.artist
+      ? `${metadata.artist}; ${clean}`
+      : clean;
   else if (key === "albumartist" || key === "album artist") metadata.albumArtist = clean;
+  else if (key === "composer" || key === "writer")
+    metadata.composer = metadata.composer
+      ? `${metadata.composer}; ${clean}`
+      : clean;
   else if (key === "album") metadata.album = clean;
   else if (key === "track") metadata.track = splitTrack(clean);
   else if (key === "disc" || key === "discnumber" || key === "disc number")
@@ -181,6 +189,7 @@ const parseId3 = (bytes: Uint8Array): ParsedMetadata => {
     TIT2: "title",
     TPE1: "artist",
     TPE2: "albumartist",
+    TCOM: "composer",
     TALB: "album",
     TRCK: "track",
     TPOS: "discnumber",
@@ -324,6 +333,8 @@ const parseMp4 = (bytes: Uint8Array): ParsedMetadata => {
               metadataField(metadata, "artist", new TextDecoder().decode(value));
             else if (type === "aART")
               metadataField(metadata, "albumartist", new TextDecoder().decode(value));
+            else if (type === "©wrt")
+              metadataField(metadata, "composer", new TextDecoder().decode(value));
             else if (type === "©alb") metadataField(metadata, "album", new TextDecoder().decode(value));
             else if (type === "©day") metadataField(metadata, "year", new TextDecoder().decode(value));
             else if (type === "©gen") metadataField(metadata, "genre", new TextDecoder().decode(value));
@@ -363,6 +374,7 @@ const mergeMetadata = (first: ParsedMetadata, second: ParsedMetadata) => ({
   title: first.title || second.title,
   artist: first.artist || second.artist,
   albumArtist: first.albumArtist || second.albumArtist,
+  composer: first.composer || second.composer,
   album: first.album || second.album,
   track: first.track || second.track,
   discNumber: first.discNumber || second.discNumber,
@@ -444,6 +456,7 @@ const trackFromFile = (
     title: metadata.title || stem.trim() || "Untitled track",
     artist: metadata.artist,
     albumArtist: metadata.albumArtist,
+    composer: metadata.composer,
     album: metadata.album,
     track: metadata.track,
     discNumber: metadata.discNumber,

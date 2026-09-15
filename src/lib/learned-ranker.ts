@@ -1,3 +1,4 @@
+import type { ListeningEvent } from "./listening-history";
 import type { FeatureVector } from "./interactions";
 
 /**
@@ -15,11 +16,11 @@ import type { FeatureVector } from "./interactions";
  * it progressively personalizes.
  */
 
-export const RANKER_MODEL_VERSION = 1;
-export const IMPRESSION_LOG_VERSION = 1;
+export const RANKER_MODEL_VERSION = 2;
+export const IMPRESSION_LOG_VERSION = 2;
 
 export type RankerModel = {
-  version: 1;
+  version: 2;
   weights: Record<string, number>;
   bias: number;
   samples: number;
@@ -38,7 +39,7 @@ export type PendingImpression = {
 };
 
 export type ImpressionLog = {
-  version: 1;
+  version: 2;
   items: PendingImpression[];
 };
 
@@ -216,9 +217,8 @@ export function recordImpressions(
 /**
  * Attribute a reward to recent recommendations.
  *
- * Exact album matches are strongest. Otherwise we fall back to the same artist
- * (discounted) and finally shared genres (discounted further), which lets
- * "you played something I suggested the genre of" still teach the model.
+ * Use the latest matching album exposure. Artist-only actions may match an
+ * artist at reduced weight; shared genre alone is not causal evidence.
  */
 export function attributeReward(
   items: readonly PendingImpression[],
@@ -229,20 +229,17 @@ export function attributeReward(
   if (!items.length || reward === 0) return { examples: [], remaining: [...items] };
   const albumId = target.albumId?.trim().toLowerCase() || "";
   const artistId = target.artistId?.trim().toLowerCase() || "";
-  const genres = new Set(
-    (target.genres || []).map((genre) => genre.trim().toLowerCase()).filter(Boolean),
-  );
   const examples: RankerExample[] = [];
   const remaining: PendingImpression[] = [];
   let bestIndex = -1;
   let bestMatch = 0;
   items.forEach((item, index) => {
-    if (now - item.at > ATTRIBUTION_WINDOW_MS) return;
+    if (item.at > now || now - item.at > ATTRIBUTION_WINDOW_MS) return;
     let match = 0;
     if (albumId && item.albumId === albumId) match = 1;
-    else if (artistId && item.artistId === artistId) match = 0.45;
-    else if (genres.size && item.genres.some((genre) => genres.has(genre))) match = 0.25;
-    if (match > bestMatch) {
+    else if (!albumId && artistId && item.artistId === artistId) match = 0.45;
+    // Shared genre alone cannot establish that a recommendation caused an action.
+    if (match > bestMatch || (match > 0 && match === bestMatch && item.at > items[bestIndex].at)) {
       bestMatch = match;
       bestIndex = index;
     }
@@ -250,8 +247,9 @@ export function attributeReward(
   if (bestIndex < 0 || bestMatch <= 0) return { examples: [], remaining: [...items] };
   const matched = items[bestIndex];
   examples.push({ features: matched.features, reward: clamp(reward * bestMatch, -1, 1) });
-  items.forEach((item, index) => {
-    if (index !== bestIndex) remaining.push(item);
+  items.forEach((item) => {
+    // One action cannot repeatedly reward older exposures of the same album.
+    if (item.albumId !== matched.albumId) remaining.push(item);
   });
   return { examples, remaining };
 }
@@ -265,27 +263,26 @@ export function trainRanker(
   if (!examples.length) return model;
   const weights = { ...model.weights };
   let bias = model.bias;
-  let samples = model.samples;
-  let positives = model.positives;
+  const samples = model.samples + examples.length;
+  const positives = model.positives + examples.filter((example) => example.reward > 0).length;
   for (let pass = 0; pass < Math.max(1, passes); pass++) {
     for (const example of examples) {
       const target = clamp((example.reward + 1) / 2, 0, 1);
       let logit = bias;
       for (const [feature, value] of Object.entries(example.features)) {
-        if (!Number.isFinite(value) || value === 0) continue;
+        if (feature === "learned" || !Number.isFinite(value) || value === 0) continue;
         logit += (weights[feature] || 0) * value;
       }
       const prediction = sigmoid(logit);
       const error = target - prediction;
       bias = clamp(bias + LEARNING_RATE * error, -4, 4);
       for (const [feature, value] of Object.entries(example.features)) {
-        if (!Number.isFinite(value) || value === 0) continue;
+        if (feature === "learned" || !Number.isFinite(value) || value === 0) continue;
         const current = weights[feature] || 0;
         const gradient = error * value - L2 * current;
         weights[feature] = clamp(current + LEARNING_RATE * gradient, -MAX_WEIGHT, MAX_WEIGHT);
       }
-      samples += 1;
-      if (target >= 0.5) positives += 1;
+
     }
   }
   return {
@@ -311,7 +308,7 @@ export const predictRanker = (
   if (!model || model.samples <= 0) return 0.5;
   let logit = model.bias;
   for (const [feature, value] of Object.entries(features)) {
-    if (!Number.isFinite(value) || value === 0) continue;
+    if (feature === "learned" || !Number.isFinite(value) || value === 0) continue;
     logit += (model.weights[feature] || 0) * value;
   }
   return sigmoid(logit);
@@ -332,3 +329,13 @@ export const blendLearnedScore = (
   const residual = predictRanker(model, features) - 0.5;
   return priorScore + residual * 0.6 * confidence;
 };
+
+/** Starting or queueing is intent; wait for consumption before judging it.
+ * A late skip is not the same signal as abandoning the opening seconds. */
+export function playbackRecommendationReward(event: Pick<ListeningEvent, "kind" | "completionRatio">) {
+  if (event.kind === "complete") return 0.9;
+  if (event.kind === "skip") return event.completionRatio >= 0.8 ? 0.3
+    : event.completionRatio <= 0.2 ? -0.8 : -0.15;
+  if (event.kind === "stop" && event.completionRatio > 0.5) return 0.2;
+  return 0;
+}

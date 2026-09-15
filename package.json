@@ -9,7 +9,9 @@
     "build:aac": "./scripts/build-aac-wasm.sh",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:automix": "VOLTA_RUN_AUDIO_AUTOMIX=1 npm test -- --grep 'AutoMix|Mixing indicator|completed blend'",
+    "test:webkit": "./scripts/test-webkit-docker.sh"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",

@@ -20,44 +20,6 @@
   color: var(--text);
   background: var(--canvas);
 }
-/* Registered so the full-screen mesh crossfades when the track changes. The
-   initial values are deliberately neutral: they are only seen before the
-   artwork palette resolves, so they must not look like a random color set. */
-@property --fullscreen-deep {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: #0b0b12;
-}
-@property --fullscreen-c1 {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: #23283d;
-}
-@property --fullscreen-c2 {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: #2d2a44;
-}
-@property --fullscreen-c3 {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: #1c2434;
-}
-@property --fullscreen-c4 {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: #262c42;
-}
-@property --fullscreen-c5 {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: #202636;
-}
-@property --fullscreen-c6 {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: #2a2f45;
-}
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -530,6 +492,25 @@ p {
   font-size: 11px;
   color: var(--muted);
 }
+.connect-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  color: var(--muted);
+}
+.connect-footer a {
+  color: inherit;
+  text-underline-offset: 3px;
+}
+.connect-footer a:hover {
+  color: var(--text);
+}
+.connect-footer a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
 .session-loading-content {
   display: flex;
   align-items: center;
@@ -676,7 +657,11 @@ p {
   overflow-y: auto;
   scrollbar-width: thin;
 }
-.library-sidebar nav > button {
+/* Pins render inside a wrapper that also holds the unpin control, so they are
+   not direct children of <nav>. Apply the same row look explicitly rather than
+   relying on the child combinator. */
+.library-sidebar nav > button,
+.library-sidebar nav .sidebar-pin-open {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -688,24 +673,29 @@ p {
   text-align: left;
   white-space: nowrap;
 }
-.library-sidebar nav > button > svg {
+.library-sidebar nav > button > svg,
+.library-sidebar nav .sidebar-pin-open > svg {
   width: 17px;
   height: 17px;
   flex-shrink: 0;
   color: var(--accent);
   stroke-width: 1.8;
 }
-.library-sidebar nav > button > span {
+.library-sidebar nav > button > span,
+.library-sidebar nav .sidebar-pin-open > span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.library-sidebar nav > button:hover {
+.library-sidebar nav > button:hover,
+.library-sidebar nav .sidebar-pin-open:hover {
   background: var(--hover);
 }
-.library-sidebar nav > button.selected {
+.library-sidebar nav > button.selected,
+.library-sidebar nav .sidebar-pin-open.selected {
   background: var(--selection);
 }
-.library-sidebar nav > button.selected > span {
+.library-sidebar nav > button.selected > span,
+.library-sidebar nav .sidebar-pin-open.selected > span {
   font-weight: 500;
 }
 .library-sidebar nav h2 {
@@ -784,7 +774,7 @@ p {
   display: flex;
   align-items: center;
   gap: 5px;
-  margin: 5px 7px -12px;
+  margin: 7px 7px -6px;
   color: var(--muted);
   font-size: 11px;
   text-decoration: none;
@@ -797,6 +787,9 @@ p {
   color: var(--muted);
   font-size: 11px;
   text-decoration: none;
+}
+.sidebar-discord-link {
+  margin-top: 7px;
 }
 .sidebar-source-link > svg {
   flex-shrink: 0;
@@ -944,6 +937,14 @@ p {
   gap: 5px;
   color: var(--secondary);
   font-size: 11px;
+}
+/* Sorting and the Select control belong together on the trailing edge. */
+.page-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .sort-control select {
   background: none;
@@ -1150,6 +1151,9 @@ p {
   flex-shrink: 0;
   border-radius: 50%;
 }
+.artist-header > div {
+  min-width: 0;
+}
 .artist-header h1 {
   font-size: 31px;
   margin: 5px 0 8px;
@@ -1159,6 +1163,32 @@ p {
   color: var(--secondary);
   font-size: 13px;
   margin: 0;
+}
+.artist-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 17px;
+}
+.artist-actions .secondary-button {
+  min-height: 32px;
+  padding: 6px 14px;
+  font-size: 12px;
+}
+.artist-songs-more {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.artist-songs-more .secondary-button {
+  min-height: 31px;
+  padding: 6px 15px;
+  font-size: 12px;
+}
+.artist-songs-more span {
+  color: var(--muted);
+  font-size: 11px;
 }
 .collection-header {
   display: grid;
@@ -1711,6 +1741,93 @@ p {
 .dock-song > button:disabled {
   opacity: 0.6;
 }
+/* AutoMix "Mixing" badge. Sits between the song caption and the seek bar, so
+   it must not disturb either; the reason text stays screen-reader only.
+   Scoped to `.dock-song` so it outranks the generic `.dock-song span` rule
+   (0,2,0 vs 0,1,1). Without that the badge loses `display: flex` and its accent
+   colour, and the three bars stack into a blob instead of a meter. */
+.dock-song .mixing-indicator,
+.full-record-caption .mixing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  padding: 1px 6px 1px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 1;
+  max-width: 100%;
+}
+/* The dock caption truncates every span; the badge must opt out of that. */
+.dock-song .mixing-indicator {
+  overflow: visible;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+.dock-song .mixing-indicator .mixing-label,
+.full-record-caption .mixing-indicator .mixing-label {
+  display: inline;
+  overflow: visible;
+  white-space: nowrap;
+  text-overflow: clip;
+  font-size: inherit;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: inherit;
+}
+/* Scoped like the badge: `.dock-song span` is 0,1,1 and would otherwise force
+   `display: block`, stacking the three bars vertically instead of in a row. */
+.dock-song .mixing-bars,
+.full-record-caption .mixing-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1.5px;
+  height: 8px;
+  overflow: visible;
+  /* A block-level span here would stack the bars vertically. */
+  flex: 0 0 auto;
+}
+.mixing-bars i {
+  display: block;
+  width: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  animation: mixing-bar 900ms ease-in-out infinite;
+}
+.mixing-bars i:nth-child(1) {
+  height: 4px;
+  animation-delay: 0ms;
+}
+.mixing-bars i:nth-child(2) {
+  height: 7px;
+  animation-delay: 140ms;
+}
+.mixing-bars i:nth-child(3) {
+  height: 5px;
+  animation-delay: 280ms;
+}
+@keyframes mixing-bar {
+  0%,
+  100% {
+    transform: scaleY(0.5);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mixing-bars i {
+    animation: none;
+  }
+}
+.full-record-caption .mixing-indicator {
+  /* The full player has room for a larger badge. */
+  margin-top: 8px;
+  font-size: 11px;
+}
 .dock-now-playing > .icon-button {
   width: 24px;
 }
@@ -1978,6 +2095,16 @@ p {
   place-items: center;
   flex: 0 0 14px;
   color: var(--muted);
+  /* Button reset: the handle is a real button so touch can grab it. */
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: grab;
+  /* Let the pointer drag win over the browser's scroll gesture. */
+  touch-action: none;
+}
+.queue-song > .queue-drag-handle:active {
+  cursor: grabbing;
 }
 .queue-song .artwork {
   width: 39px;
@@ -2086,11 +2213,34 @@ p {
   line-height: 1.5;
 }
 .lyrics-lines {
+  /* Word-by-word lyrics. The fill sweeps a two-stop gradient across each
+     word's glyph box with `background-clip: text`, so the sung part reads
+     white while the rest stays dim — see `.lyric-row` below. Alphas match
+     the reference player's, which keeps unsung text visible rather than hiding
+     it. */
+  --lyric-fill: 255 255 255;
+  --lyric-fill-alpha: 0.45;
+  --lyric-fill-alpha-active: 1;
+  --lyric-direction: 90deg;
+  --lyric-progress: -20%;
+  --lyric-current-scale: 1.05;
+  --lyric-blur: 2px;
+  /* The current line is drawn 5% larger, so the list keeps this much clear on
+     the right. Without it the end of a long line would grow past the clip edge
+     and disappear. */
+  --lyric-edge: 6%;
   flex: 1;
   overflow: auto;
+  /* Sideways overflow is clipped, but only ever empty padding: the scaled line
+     always lands inside it thanks to the reservation above. */
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding: 30px 23px 140px;
+  padding-right: calc(23px + var(--lyric-edge));
   scrollbar-width: none;
+}
+.lyrics-lines::-webkit-scrollbar {
+  display: none;
 }
 .lyrics-lines button,
 .lyrics-lines p {
@@ -2104,12 +2254,113 @@ p {
   letter-spacing: -0.65px;
   line-height: 1.25;
   text-align: left;
-  transition: color 0.2s;
+  transition: color 0.1s;
   overflow-wrap: anywhere;
 }
 .lyrics-lines button:hover,
-.lyrics-lines .active-line {
+.lyrics-lines button[data-lyric-current] {
   color: var(--text);
+}
+/* The inner span carries the scale, so the words can keep their own
+   transforms. Scaling the row itself would drag the hover target around with
+   it. */
+.lyric-line {
+  display: inline-block;
+  transform: scale(1);
+  transform-origin: left center;
+  transition:
+    transform 0.1s ease-in-out,
+    filter 0.25s linear;
+}
+.lyrics-lines button[data-lyric-current] .lyric-line {
+  transform: scale(var(--lyric-current-scale));
+}
+.lyrics-lines button.lyric-row--secondary {
+  text-align: right;
+}
+.lyrics-lines button.lyric-row--secondary .lyric-line {
+  transform-origin: right center;
+}
+.lyric-word,
+.lyric-letter {
+  display: inline-block;
+  color: inherit;
+}
+/* Room above each glyph for the two-pixel lift and the glow, so neither is
+   clipped by the line box. */
+.lyric-word {
+  margin-top: -5px;
+  padding-top: 5px;
+  transform: translateY(var(--lyric-lift, 0));
+}
+.lyric-letter {
+  transform: translateY(var(--lyric-lift, 0)) scale(var(--lyric-scale, 1));
+  text-shadow: 0 0 var(--lyric-glow-blur, 0px)
+    rgb(var(--lyric-fill) / var(--lyric-glow-alpha, 0));
+}
+/* Keep the animated line on its own compositor layer; without this the
+   per-frame gradient and shadow writes repaint the whole list. */
+.lyrics-lines button[data-lyric-current] .lyric-word,
+.lyrics-lines button[data-lyric-current] .lyric-letter {
+  will-change: transform, background-image, text-shadow;
+}
+/* `--lyric-progress` defaults to fully unsung, so a word that has not been
+   painted yet reads as dim instead of flashing at full brightness. */
+.lyrics-lines button[data-lyric-current] .lyric-word,
+.lyrics-lines button[data-lyric-current] .lyric-letter {
+  background-image: linear-gradient(
+    var(--lyric-direction),
+    rgb(var(--lyric-fill) / var(--lyric-fill-alpha-active)) var(--lyric-progress),
+    rgb(var(--lyric-fill) / var(--lyric-fill-alpha))
+      calc(var(--lyric-progress) + 20%)
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.lyric-word:dir(rtl),
+.lyric-letter:dir(rtl) {
+  --lyric-direction: 270deg;
+}
+/* A background vocal sits under the lead line, only while that line is being
+   sung, and fades in rather than appearing. */
+.lyric-backing {
+  display: none;
+  margin-top: 20px;
+  font-size: 0.56em;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  /* Its own, dimmer fill: even fully sung, a backing vocal stays behind the
+     lead. */
+  --lyric-fill-alpha: 0.175;
+  --lyric-fill-alpha-active: 0.35;
+}
+.lyrics-lines button[data-lyric-current] .lyric-backing {
+  display: block;
+}
+.lyric-translation {
+  display: block;
+  margin-top: 6px;
+  font-size: 70%;
+  font-weight: 500;
+  letter-spacing: -0.2px;
+  color: var(--secondary);
+  opacity: 0.45;
+}
+/* The lines either side of the current one are blurred while it is playing,
+   which pushes the line being sung forward without dimming it further. The
+   very first line is left alone so the top of the song does not start grey. */
+.lyrics-lines.is-playing:not(.no-lyric-blur) button:not([data-lyric-current]):not(:first-child) .lyric-line {
+  filter: blur(var(--lyric-blur));
+}
+/* A blurred line comes back into focus under the pointer, because it is the
+   thing about to be jumped to. This selector is deliberately as specific as
+   the blur rule above, which it has to override. */
+.lyrics-lines.is-playing:not(.no-lyric-blur) button:hover:not([data-lyric-current]):not(:first-child) .lyric-line,
+.lyrics-lines.is-playing
+  button:focus-visible:not([data-lyric-current]):not(:first-child)
+  .lyric-line {
+  filter: none;
 }
 .lyrics-lines.unsynced p {
   font-size: 19px;
@@ -2119,12 +2370,62 @@ p {
   white-space: pre-wrap;
 }
 
+.frame-monitor {
+  /* Beta-only diagnostics overlay. Deliberately plain — no backdrop-filter, no
+     shadow — because anything expensive here would show up in the very numbers
+     it exists to measure. */
+  position: absolute;
+  right: 20px;
+  bottom: 14px;
+  z-index: 3;
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px solid #ffffff26;
+  border-radius: 8px;
+  background: #000000d9;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.frame-monitor-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  /* The stats line is the wide one; wrapping it would resize the panel and
+     make the chart jump, so the panel is sized to fit it. */
+  width: max-content;
+  white-space: nowrap;
+}
+.frame-monitor-readout b {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.frame-monitor-readout span {
+  color: #ffffff9e;
+  font-size: 10px;
+}
+.frame-monitor-pacing {
+  color: #ffffff9e;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.frame-monitor-chart {
+  display: block;
+  border-radius: 3px;
+  background: #ffffff0f;
+}
+
 .dialog-overlay {
   position: fixed;
   inset: 0;
   z-index: 20;
   background: #0009;
-  animation: fade-in 0.15s;
+  animation: dialog-overlay-in 0.18s ease-out;
+}
+.dialog-overlay[data-state="closed"] {
+  animation: dialog-overlay-out 0.14s ease-in forwards;
 }
 .dialog {
   position: fixed;
@@ -2140,6 +2441,10 @@ p {
   border-radius: 12px;
   background: var(--sidebar);
   box-shadow: 0 22px 90px #0008;
+  animation: dialog-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dialog[data-state="closed"] {
+  animation: dialog-out 0.14s ease-in forwards;
 }
 .dialog-heading {
   display: flex;
@@ -2169,7 +2474,8 @@ p {
   font-size: 12px;
   font-weight: 600;
 }
-.playlist-form input {
+.playlist-form input,
+.playlist-form textarea {
   width: 100%;
   min-height: 38px;
   padding: 8px 10px;
@@ -2178,6 +2484,24 @@ p {
   background: var(--canvas);
   color: var(--text);
   font: inherit;
+}
+.playlist-form textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+.playlist-form-toggle {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: flex-start;
+  gap: 9px !important;
+  color: var(--secondary) !important;
+  font-weight: 400 !important;
+}
+.playlist-form-toggle input {
+  width: auto;
+  min-height: 0;
+  margin-top: 2px;
+  accent-color: var(--accent);
 }
 .playlist-form p,
 .playlist-picker p {
@@ -2273,11 +2597,54 @@ p {
   color: var(--muted);
   font-size: 10.5px;
 }
-.settings-sections {
+/* Settings tab bar. Mirrors the macOS Settings toolbar: a stable row of
+   labelled destinations that always shows which pane is active. */
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sidebar);
+}
+.settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 6px 13px;
+  border-radius: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 500;
+  transition: color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+.settings-tab > svg {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+.settings-tab:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.settings-tab.selected {
+  color: var(--text);
+  background: var(--canvas);
+  box-shadow: 0 1px 3px #00000033, inset 0 0 0 1px var(--line);
+}
+.settings-tab.selected > svg {
+  color: var(--accent);
+  opacity: 1;
+}
+.settings-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.settings-panels {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(330px, 100%), 1fr));
-  align-items: start;
-  gap: 24px 26px;
+  gap: 24px;
+  min-width: 0;
 }
 .settings-section {
   display: grid;
@@ -2285,35 +2652,43 @@ p {
   min-width: 0;
 }
 .settings-section-heading {
-  display: grid;
-  gap: 3px;
-}
-.settings-section-heading h2 {
   margin: 0;
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
 }
-.settings-section-heading p {
+.settings-section-footer {
   margin: 0;
+  padding: 0 2px;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.45;
 }
+/* Grouped inset list: one rounded surface per pane, hairline separators
+   between rows, exactly like an iOS Settings group. */
 .settings-rows {
   display: grid;
-  gap: 8px;
-}
-.settings-rows .setting-row + .setting-row {
-  margin-top: 0;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--canvas);
 }
 .settings-rows .setting-row {
   min-height: 54px;
+  border-radius: 0;
+  background: transparent;
 }
-.settings-rows .setting-row > span:first-child {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
+.settings-rows .setting-row + .setting-row {
+  margin-top: 0;
+  border-top: 1px solid var(--line);
+}
+.settings-rows .setting-row:first-child {
+  border-top-left-radius: 11px;
+  border-top-right-radius: 11px;
+}
+.settings-rows .setting-row:last-child {
+  border-bottom-left-radius: 11px;
+  border-bottom-right-radius: 11px;
 }
 .settings-rows .setting-row b {
   font-weight: 500;
@@ -2322,6 +2697,30 @@ p {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.4;
+}
+/* Leading glyph tile, tinted with a system color like an iOS Settings row. */
+.setting-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  color: #fff;
+}
+.setting-icon[data-tone="blue"] { background: #0a84ff; }
+.setting-icon[data-tone="green"] { background: #30d158; }
+.setting-icon[data-tone="indigo"] { background: #5e5ce6; }
+.setting-icon[data-tone="orange"] { background: #ff9f0a; }
+.setting-icon[data-tone="pink"] { background: #ff375f; }
+.setting-icon[data-tone="purple"] { background: #bf5af2; }
+.setting-icon[data-tone="teal"] { background: #40c8e0; }
+.setting-icon[data-tone="gray"] { background: #8e8e93; }
+.setting-copy {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
 }
 .settings-account-row {
   justify-content: space-between;
@@ -2469,6 +2868,334 @@ p {
   background: var(--canvas);
   font-size: 12px;
 }
+.settings-focus-target {
+  animation: settings-focus-target 5s ease-out both;
+}
+@keyframes settings-focus-target {
+  0%, 70% {
+    background: color-mix(in srgb, #fa243c 14%, var(--canvas));
+  }
+  100% {
+    background: var(--canvas);
+  }
+}
+/* Recommendation engine. A standalone screen rather than a settings list, so
+   the dials and the live slate read as one connected surface. */
+.engine-dialog {
+  width: min(940px, calc(100vw - 32px));
+  padding: 20px;
+}
+.engine-view {
+  display: grid;
+  gap: 16px;
+  color: var(--secondary);
+  font-size: 12px;
+}
+.engine-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--canvas);
+}
+.engine-hero-copy {
+  display: grid;
+  gap: 5px;
+  flex: 1 1 380px;
+  min-width: 0;
+}
+.engine-hero-kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.engine-hero-copy h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+.engine-hero-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.engine-risk {
+  display: grid;
+  flex: 0 0 auto;
+  justify-items: end;
+  gap: 3px;
+  min-width: 170px;
+}
+.engine-risk-label {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.engine-risk-value {
+  color: var(--accent);
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.engine-risk-track {
+  overflow: hidden;
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--sidebar);
+}
+.engine-risk-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.18s ease;
+}
+.engine-risk small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.engine-block {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
+}
+.engine-block-heading {
+  display: grid;
+  gap: 2px;
+}
+.engine-block-heading b {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.engine-block-heading small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.engine-presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  gap: 8px;
+}
+.engine-preset {
+  display: grid;
+  gap: 3px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--canvas);
+  color: var(--secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+.engine-preset:hover {
+  background: var(--hover);
+}
+.engine-preset b {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.engine-preset small {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.engine-preset[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--selection);
+}
+.engine-preset[aria-pressed="true"] b {
+  color: var(--accent);
+}
+.engine-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.engine-dials {
+  display: grid;
+  gap: 7px;
+}
+.engine-dial {
+  display: grid;
+  gap: 4px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--canvas);
+}
+.engine-dial-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.engine-dial-head label {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.engine-dial-head output {
+  color: var(--accent);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.engine-dial > small {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.engine-dial input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.engine-dial-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.engine-dial-ends small {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: italic;
+}
+.engine-shelf {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+.engine-shelf .engine-dial-head,
+.engine-shelf > small {
+  grid-column: 1;
+}
+.engine-shelf .setting-stepper {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+}
+/* Sticky so "Reset dials" stays reachable however tall the dial column gets. */
+.engine-actions {
+  position: sticky;
+  bottom: -20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 -20px -20px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--sidebar);
+}
+.engine-actions-summary {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.engine-actions-summary b {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.engine-actions-summary small {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.engine-preview-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.engine-preview-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: var(--canvas);
+}
+.engine-preview-rank {
+  flex: 0 0 auto;
+  width: 17px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.engine-preview-copy {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  min-width: 0;
+}
+.engine-preview-copy b {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.engine-preview-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.engine-preview-score {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+/* Shows whether a preview pick is genuinely new or already worn out. */
+.engine-preview-exposure {
+  flex: 0 0 auto;
+  min-width: 34px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--sidebar);
+  color: var(--muted);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.engine-preview-exposure[data-level="new"] {
+  background: var(--selection);
+  color: var(--accent);
+}
+@media (max-width: 640px) {
+  .engine-risk {
+    justify-items: start;
+    min-width: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .engine-risk-fill {
+    transition: none;
+  }
+}
 .setting-row + .setting-row {
   margin-top: 10px;
 }
@@ -2517,10 +3244,6 @@ p {
 .setting-toggle {
   align-items: center;
 }
-.setting-toggle > span {
-  display: grid;
-  gap: 4px;
-}
 .setting-toggle b {
   font-weight: 500;
 }
@@ -2532,11 +3255,6 @@ p {
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
-}
-.setting-action-row > span {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
 }
 .setting-action-row b {
   font-weight: 500;
@@ -2919,12 +3637,17 @@ p {
   margin: 5px;
   background: var(--line);
 }
+.context-menu button:disabled {
+  color: var(--muted);
+  opacity: 0.45;
+  cursor: default;
+}
 .custom-context-menu {
   position: fixed;
   max-width: min(280px, calc(100vw - 16px));
   max-height: min(420px, calc(100dvh - 16px));
   overflow-y: auto;
-  animation: context-pop 0.1s ease-out;
+  animation: context-pop 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .custom-context-menu button {
   display: flex;
@@ -2949,6 +3672,41 @@ p {
 }
 .custom-context-menu button svg {
   flex: 0 0 auto;
+}
+/* The full-player surface uses white as its accent for lyric emphasis. Keep
+   that accent from turning the menu's hover state into white-on-white text. */
+.fullscreen-dialog .custom-context-menu button:hover,
+.fullscreen-dialog .custom-context-menu button:focus-visible {
+  color: #fff;
+  background: #ffffff2b;
+}
+.volta-tooltip {
+  position: fixed;
+  z-index: 100;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sidebar) 96%, #000);
+  box-shadow: 0 7px 22px #0006;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.35;
+  pointer-events: none;
+  white-space: normal;
+  text-align: center;
+}
+.volta-tooltip[data-placement="above"] {
+  animation: tooltip-in-above 0.14s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+.volta-tooltip[data-placement="below"] {
+  animation: tooltip-in-below 0.14s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+.volta-tooltip[data-state="closed"][data-placement="above"] {
+  animation: tooltip-out-above 0.12s ease-in forwards;
+}
+.volta-tooltip[data-state="closed"][data-placement="below"] {
+  animation: tooltip-out-below 0.12s ease-in forwards;
 }
 .media-details-dialog {
   width: min(620px, calc(100vw - 32px));
@@ -3013,6 +3771,56 @@ p {
   align-items: center;
   gap: 6px;
 }
+.song-credits {
+  display: grid;
+  gap: 10px;
+  margin: 20px 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.song-credits-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 16px;
+}
+.song-credits-heading h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+}
+.song-credits-heading p,
+.song-credits-empty {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.song-credits-heading .secondary-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.song-credits-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+.song-credits-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+.song-credits-list dt { color: var(--muted); }
+.song-credits-list dd {
+  margin: 0;
+  color: var(--text);
+  text-align: right;
+}
 @keyframes context-pop {
   from {
     opacity: 0;
@@ -3022,6 +3830,14 @@ p {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
+}
+@keyframes fullscreen-dialog-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fullscreen-dialog-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 .fullscreen-dialog {
   inset: 0;
@@ -3038,6 +3854,12 @@ p {
   --line: #ffffff2b;
   --hover: #ffffff18;
   --accent: #fff;
+  /* Full-screen geometry owns transform: the centered dialog animation would
+     briefly move this surface to the top-left while it opens. */
+  animation: fullscreen-dialog-in 0.18s ease-out;
+}
+.fullscreen-dialog[data-state="closed"] {
+  animation: fullscreen-dialog-out 0.14s ease-in forwards;
 }
 .fullscreen-dialog > .dialog-heading {
   position: relative;
@@ -3049,292 +3871,153 @@ p {
   font-size: 12px;
   color: #ffffffa8;
 }
+/* Full-screen backdrop.
+   The now-playing backdrop is drawn in WebGL in its original form, not CSS:
+   four rotated copies of the cover inside one container that is blurred five
+   times over and then graded once. The numbers below are that scene's numbers,
+   so the same picture comes out of the CSS filter pipeline. */
 .fullscreen-background {
   position: absolute;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
-  background: var(--fullscreen-deep, #0b0b12);
-  /* Crossfade the mesh when the current track changes. */
-  transition:
-    --fullscreen-deep 1200ms ease,
-    --fullscreen-c1 1200ms ease,
-    --fullscreen-c2 1200ms ease,
-    --fullscreen-c3 1200ms ease,
-    --fullscreen-c4 1200ms ease,
-    --fullscreen-c5 1200ms ease,
-    --fullscreen-c6 1200ms ease,
-    background 1200ms ease;
+  background: var(--canvas);
 }
-/* Apple Music's full-screen background is a mesh gradient: a set of large,
-   soft, dominant-color fields that continuously drift and morph over a dark
-   base. Six blobs are scaled up and blurred together, then moved on long,
-   offset loops so the whole surface slowly breathes and changes shape. */
+.fullscreen-grade-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+/* The grade (saturation 2.75, contrast 1.9, brightness 0.7) is one affine map
+   applied once, so it has to be a single feColorMatrix. The obvious
+   `saturate()/contrast()/brightness()` chain clamps after each function, which
+   pins every highlight at 70% instead of letting it reach white. */
+.fullscreen-grade {
+  position: absolute;
+  inset: 0;
+  filter: url(#volta-fullscreen-grade);
+}
 .fullscreen-mesh {
   position: absolute;
-  /* Extra bleed so blobs can travel far without exposing an edge. */
+  inset: 0;
+  /* The five chained PixiJS blur passes (5, 10, 20, 40, 80) compose into a
+     single Gaussian of roughly this standard deviation. */
+  filter: blur(104px);
+}
+/* Fills the corners on viewports where the largest square no longer reaches,
+   and bleeds past the viewport so the blur never samples past its own edge. */
+.fullscreen-cover {
+  position: absolute;
   inset: -35%;
-  filter: blur(90px) saturate(1.15) brightness(0.85);
-  /* The whole mesh slowly rotates and breathes, so movement is continuous even
-     between the individual blob keyframes. Like the blobs, this is a closed
-     loop so it never snaps back to its starting orientation. */
-  animation: fullscreen-mesh-breathe 30s ease-in-out infinite;
-  will-change: transform;
 }
-@keyframes fullscreen-mesh-breathe {
-  0% {
-    transform: rotate(0deg) scale(1);
-  }
-  25% {
-    transform: rotate(3deg) scale(1.06);
-  }
-  50% {
-    transform: rotate(5deg) scale(1.1);
-  }
-  75% {
-    transform: rotate(2deg) scale(1.05);
-  }
-  100% {
-    transform: rotate(0deg) scale(1);
-  }
-}
-/* Blobs are anchored near the edges rather than stacked in the centre, so the
-   artwork's individual colors stay readable as distinct regions instead of
-   averaging into a single muddy wash. The dominant color is the largest and
-   most opaque; the rest recede in a deliberate hierarchy. */
-.fullscreen-blob {
+.fullscreen-layer {
   position: absolute;
-  border-radius: 50%;
-  /* `plus-lighter` keeps overlapping colors additive and vivid; plain `screen`
-     over six layers washes the whole surface toward white. */
-  mix-blend-mode: plus-lighter;
-  will-change: transform;
-  transform: translate3d(0, 0, 0);
+  width: var(--fs-size);
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  /* Driven from the 15fps backdrop ticker, not a CSS animation: turning these
+     sprites is what forces the blurred layer to be re-rasterised, so it is
+     deliberately kept off the per-frame path. */
+  rotate: var(--fs-angle, 0deg);
 }
-.fullscreen-blob--1 {
-  top: -12%;
-  left: -12%;
-  width: 82%;
-  height: 82%;
-  opacity: 0.95;
-  background: radial-gradient(
-    circle at 50% 50%,
-    var(--fullscreen-c1, #5b6cff) 0%,
-    transparent 62%
-  );
-  animation: fullscreen-mesh-a 17s ease-in-out infinite;
-}
-.fullscreen-blob--2 {
-  top: -16%;
-  right: -8%;
-  width: 72%;
-  height: 72%;
-  opacity: 0.8;
-  background: radial-gradient(
-    circle at 50% 50%,
-    var(--fullscreen-c2, #b45bff) 0%,
-    transparent 62%
-  );
-  animation: fullscreen-mesh-b 21s ease-in-out infinite;
-}
-.fullscreen-blob--3 {
-  bottom: -14%;
-  left: -8%;
-  width: 74%;
-  height: 74%;
-  opacity: 0.72;
-  background: radial-gradient(
-    circle at 50% 50%,
-    var(--fullscreen-c3, #ff6ec7) 0%,
-    transparent 62%
-  );
-  animation: fullscreen-mesh-c 19s ease-in-out infinite;
-}
-.fullscreen-blob--4 {
-  bottom: -16%;
-  right: -12%;
-  width: 70%;
-  height: 70%;
-  opacity: 0.68;
-  background: radial-gradient(
-    circle at 50% 50%,
-    var(--fullscreen-c4, #4ad6ff) 0%,
-    transparent 62%
-  );
-  animation: fullscreen-mesh-d 23s ease-in-out infinite;
-}
-.fullscreen-blob--5 {
-  top: 18%;
-  left: 26%;
-  width: 52%;
-  height: 52%;
-  opacity: 0.5;
-  background: radial-gradient(
-    circle at 50% 50%,
-    var(--fullscreen-c5, #ffa14a) 0%,
-    transparent 60%
-  );
-  animation: fullscreen-mesh-e 14s ease-in-out infinite;
-}
-.fullscreen-blob--6 {
-  bottom: 16%;
-  right: 24%;
-  width: 48%;
-  height: 48%;
-  opacity: 0.44;
-  background: radial-gradient(
-    circle at 50% 50%,
-    var(--fullscreen-c6, #7cf7c4) 0%,
-    transparent 60%
-  );
-  animation: fullscreen-mesh-f 25s ease-in-out infinite;
-}
-.fullscreen-grain {
+.fullscreen-art {
   position: absolute;
   inset: 0;
-  opacity: 0.06;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
-/* Apple's backdrop darkens toward the edges so the artwork and lyrics stay the
-   brightest elements on screen. */
-.fullscreen-vignette {
+.fullscreen-art--in {
+  animation: fullscreen-art-in 1700ms linear forwards;
+}
+/* The outgoing cover is deliberately held fully opaque while the new one fades
+   in on top of it. Fading both at once would leave the pair only part-covered
+   halfway through, and whatever sits behind the backdrop would show through as
+   a grey flash. */
+.fullscreen-art--out {
+  opacity: 1;
+}
+/* Every offset in this scene is measured in units of the screen WIDTH, on
+   both axes, so the orbit wrappers are squares as tall as the viewport is
+   wide. Rotating such a square about its own centre swings the sprite around
+   a circle of radius W/4. */
+.fullscreen-orbit {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  margin-top: -50%;
+  width: 100%;
+  aspect-ratio: 1;
+  rotate: var(--fs-angle, 0deg);
+}
+.fullscreen-orbit--c {
+  transform-origin: 50% 50%;
+}
+.fullscreen-orbit--d {
+  transform-origin: 55% 55%;
+}
+.fullscreen-layer--a {
+  --fs-size: 125%;
+  left: 50%;
+  top: 50%;
+}
+.fullscreen-layer--b {
+  --fs-size: 80%;
+  left: 40%;
+  top: 40%;
+}
+.fullscreen-layer--c {
+  --fs-size: 50%;
+  left: 75%;
+  top: 50%;
+}
+.fullscreen-layer--d {
+  --fs-size: 25%;
+  left: 80%;
+  top: 55%;
+}
+/* A scrim over the backdrop so the record and the lyrics stay the brightest
+   things on screen, then a slight lift of the whole surface. */
+.fullscreen-veil {
   position: absolute;
   inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(
-      120% 100% at 50% 45%,
-      transparent 30%,
-      #00000059 72%,
-      #000000a6 100%
-    ),
-    linear-gradient(#00000038, transparent 22%, transparent 78%, #0000004d);
+  background: rgb(0 0 0 / 0.5);
 }
-/* Each blob travels a CLOSED loop: the 0% and 100% states are identical, so
-   the animation restarts seamlessly instead of teleporting back to its start.
-   With `ease-in-out` the blob glides, briefly eases, then glides on, and the
-   six different phases mean the mesh as a whole never stops moving. Scale
-   ranges are kept narrow so additive blending does not pulse in brightness. */
-@keyframes fullscreen-mesh-a {
-  0% {
-    transform: translate3d(-14%, -10%, 0) scale(1);
+.fullscreen-lift {
+  position: absolute;
+  inset: 0;
+  background: rgb(255 255 255 / 0.05);
+}
+@keyframes fullscreen-art-in {
+  from {
+    opacity: 0;
   }
-  25% {
-    transform: translate3d(10%, 6%, 0) scale(1.2);
-  }
-  50% {
-    transform: translate3d(16%, 20%, 0) scale(1.08);
-  }
-  75% {
-    transform: translate3d(-8%, 12%, 0) scale(1.16);
-  }
-  100% {
-    transform: translate3d(-14%, -10%, 0) scale(1);
+  to {
+    opacity: 1;
   }
 }
-@keyframes fullscreen-mesh-b {
-  0% {
-    transform: translate3d(12%, -8%, 0) scale(1.12);
-  }
-  25% {
-    transform: translate3d(-12%, 10%, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(6%, 22%, 0) scale(1.2);
-  }
-  75% {
-    transform: translate3d(16%, 6%, 0) scale(1.06);
-  }
-  100% {
-    transform: translate3d(12%, -8%, 0) scale(1.12);
-  }
-}
-@keyframes fullscreen-mesh-c {
-  0% {
-    transform: translate3d(-10%, 8%, 0) scale(1.14);
-  }
-  25% {
-    transform: translate3d(14%, -10%, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(-6%, -18%, 0) scale(1.2);
-  }
-  75% {
-    transform: translate3d(10%, 4%, 0) scale(1.06);
-  }
-  100% {
-    transform: translate3d(-10%, 8%, 0) scale(1.14);
-  }
-}
-@keyframes fullscreen-mesh-d {
-  0% {
-    transform: translate3d(10%, 10%, 0) scale(1.04);
-  }
-  25% {
-    transform: translate3d(-14%, -12%, 0) scale(1.2);
-  }
-  50% {
-    transform: translate3d(-14%, 18%, 0) scale(1.06);
-  }
-  75% {
-    transform: translate3d(8%, -10%, 0) scale(1.18);
-  }
-  100% {
-    transform: translate3d(10%, 10%, 0) scale(1.04);
-  }
-}
-@keyframes fullscreen-mesh-e {
-  0% {
-    transform: translate3d(-8%, 4%, 0) scale(1) rotate(0deg);
-  }
-  25% {
-    transform: translate3d(16%, 14%, 0) scale(1.22) rotate(14deg);
-  }
-  50% {
-    transform: translate3d(-10%, -12%, 0) scale(1.05) rotate(-12deg);
-  }
-  75% {
-    transform: translate3d(8%, -6%, 0) scale(1.18) rotate(10deg);
-  }
-  100% {
-    transform: translate3d(-8%, 4%, 0) scale(1) rotate(0deg);
-  }
-}
-@keyframes fullscreen-mesh-f {
-  0% {
-    transform: translate3d(8%, -6%, 0) scale(1.14) rotate(0deg);
-  }
-  25% {
-    transform: translate3d(-12%, 12%, 0) scale(1) rotate(-14deg);
-  }
-  50% {
-    transform: translate3d(10%, -14%, 0) scale(1.2) rotate(12deg);
-  }
-  75% {
-    transform: translate3d(-6%, 8%, 0) scale(1.04) rotate(-8deg);
-  }
-  100% {
-    transform: translate3d(8%, -6%, 0) scale(1.14) rotate(0deg);
-  }
-}
+/* The rotation periods live on the elements themselves, as `data-spin-period`
+   and `data-spin-direction`, because the backdrop ticker drives them, so
+   there are no spin keyframes here. */
 .full-player-layout {
   position: relative;
   z-index: 1;
   height: calc(100% - 36px);
-  max-width: 1000px;
+  max-width: 1880px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(35px, 7vw, 100px);
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: clamp(80px, 5vw, 130px);
   align-items: center;
   margin: 0 auto;
 }
 .full-record {
-  width: min(100%, 410px);
+  width: min(100%, 620px);
   justify-self: center;
 }
 .full-record > .artwork {
-  max-width: min(100%, calc(100dvh - 286px));
+  width: min(100%, clamp(460px, 46dvh, 620px));
+  max-width: 100%;
   margin: 0 auto;
   border-radius: 9px;
   box-shadow: 0 13px 26px #0002;
@@ -3399,6 +4082,10 @@ p {
   width: 33px;
   height: 39px;
 }
+.fullscreen-dialog .transport-controls.large > .icon-button.active:first-child,
+.fullscreen-dialog .transport-controls.large > .icon-button.active:last-child {
+  color: #fa586a;
+}
 .fullscreen-volume {
   display: flex;
   align-items: center;
@@ -3454,12 +4141,15 @@ p {
 }
 .embedded .lyrics-lines {
   padding: 90px 0 150px;
+  /* The lyrics column is at its widest here, so the scaled current line needs
+     the same clearance as the docked list. */
+  padding-right: var(--lyric-edge);
   mask-image: linear-gradient(transparent, #000 8%, #000 83%, transparent);
 }
 .embedded .lyrics-lines button {
-  font-size: clamp(27px, 3vw, 35px);
+  font-size: clamp(34px, 3vw, 52px);
   line-height: 1.25;
-  padding: 15px 0;
+  padding: 18px 0;
   letter-spacing: -0.8px;
 }
 .embedded .queue-content {
@@ -3491,6 +4181,68 @@ p {
   }
   to {
     opacity: 1;
+  }
+}
+@keyframes dialog-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dialog-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes dialog-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)) scale(0.985); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes dialog-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, calc(-50% + 5px)) scale(0.99); }
+}
+@keyframes tooltip-in-above {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 4px));
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -100%);
+  }
+}
+@keyframes tooltip-in-below {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+@keyframes tooltip-out-above {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -100%);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 3px));
+  }
+}
+@keyframes tooltip-out-below {
+  from {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .volta-tooltip,
+  .custom-context-menu {
+    animation-duration: 0.01ms !important;
   }
 }
 
@@ -3930,11 +4682,19 @@ p {
   }
   .embedded .lyrics-lines button {
     font-size: 28px;
-  }
-  .setting-row {
+  }  .setting-row {
+    flex-wrap: wrap;
     align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
+    gap: 8px 12px;
+  }
+  .setting-copy {
+    flex: 1 1 60%;
+  }
+  .setting-row > select,
+  .setting-row > .setting-stepper,
+  .setting-row > .setting-action-buttons,
+  .setting-row > .secondary-button {
+    flex: 1 1 100%;
   }
   .setting-row select {
     width: 100%;
@@ -3989,5 +4749,1032 @@ p {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Crash recovery surface (render error boundary). */
+.crash-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: var(--canvas);
+  color: var(--text);
+}
+.crash-card {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+.crash-kicker {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.crash-card h1 {
+  margin: 0;
+  font-size: 22px;
+}
+.crash-message {
+  margin: 0;
+  color: var(--secondary);
+  line-height: 1.5;
+}
+.crash-detail {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--row);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+}
+.crash-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.crash-channel {
+  /* Rendered as an <a> so it navigates normally; match the button look. */
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+/* Connection diagnosis help shown under the sign-in form. */
+.connection-help {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--row);
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+}
+.connection-help b {
+  color: var(--text);
+  font-size: 13px;
+}
+.connection-help p {
+  margin: 0;
+}
+.connection-help code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--hover);
+  color: var(--text);
+  font-size: 12px;
+  word-break: break-all;
+}
+.connection-help-origin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.connection-help-details summary {
+  cursor: pointer;
+  color: var(--secondary);
+}
+.connection-help-details ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Sidebar pins. */
+.sidebar-pin {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sidebar-pin-open {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sidebar-pin .icon-button {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  opacity: 0;
+}
+.sidebar-pin:hover .icon-button,
+.sidebar-pin:focus-within .icon-button {
+  opacity: 1;
+}
+@media (hover: none) {
+  .sidebar-pin .icon-button {
+    opacity: 1;
+  }
+}
+
+/* Saved libraries on the sign-in screen. */
+.saved-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+.saved-accounts-title {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.saved-account {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.saved-account-use {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--row);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.saved-account-use:hover:not(:disabled) {
+  background: var(--hover);
+}
+.saved-account-use span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.saved-account-use small {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-button {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* Favorite Songs / Albums / Artists segments. */
+.favorites-tabs {
+  display: inline-flex;
+  gap: 2px;
+  margin: 0 0 18px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--row);
+}
+.favorites-tabs button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.favorites-tabs button:hover {
+  color: var(--text);
+}
+.favorites-tabs button.selected {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* Search result type tabs. */
+.search-tabs {
+  display: inline-flex;
+  gap: 2px;
+  margin: 4px 0 18px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--row);
+}
+.search-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.search-tabs button:hover {
+  color: var(--text);
+}
+.search-tabs button.selected {
+  background: var(--hover);
+  color: var(--text);
+}
+.search-tab-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.search-tab-empty {
+  margin: 0;
+  padding: 24px 0;
+  color: var(--secondary);
+}
+
+/* Song multi-select. */
+.track-select-cell {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+}
+.track-select-cell input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.track-table.selecting .song-row,
+.track-table.selecting .track-table-heading {
+  grid-template-columns: 26px 30px minmax(120px, 1.5fr) minmax(100px, 1fr) 64px
+    42px 28px;
+}
+.song-row.selected {
+  background: var(--selection);
+}
+/* Playlist track reordering. */
+.song-row.reorderable {
+  transition: background 0.12s, opacity 0.12s;
+}
+.song-row.is-dragging {
+  opacity: 0.45;
+}
+.song-row.is-drag-over {
+  border-bottom-color: var(--accent);
+  background: var(--selection);
+}
+.song-drag-handle {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+}
+.song-drag-handle:active {
+  cursor: grabbing;
+}
+/* Column shifts for the optional reorder handle and select checkbox. */
+.song-row.reorderable,
+.track-table:has(.song-drag-handle) .track-table-heading {
+  grid-template-columns: 22px 30px minmax(120px, 1.5fr) minmax(100px, 1fr) 64px
+    42px 28px;
+}
+.track-table.selecting .song-row.reorderable,
+.track-table.selecting:has(.song-drag-handle) .track-table-heading {
+  grid-template-columns: 22px 26px 30px minmax(120px, 1.5fr) minmax(100px, 1fr)
+    64px 42px 28px;
+}
+/* Compact album/playlist tables render no header row. */
+.album-tracks .song-row.reorderable {
+  grid-template-columns: 22px 24px minmax(0, 1fr) 40px 25px;
+}
+.track-table.selecting.album-tracks .song-row {
+  grid-template-columns: 26px 24px minmax(0, 1fr) 40px 25px;
+}
+.track-table.selecting.album-tracks .song-row.reorderable {
+  grid-template-columns: 22px 26px 24px minmax(0, 1fr) 40px 25px;
+}
+.select-button.selected {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Sticky selection bar. It sits above the list and sticks to the top of the
+   scroll area, so it never collides with the floating playback dock. */
+.bulk-bar {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--dock);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 12px 32px #00000055;
+}
+/* The scroll area has 14px of top padding, and sticky offsets resolve against
+   the content box. Without a cap the padding band stays open and rows slide
+   out above the bar while it is stuck. In normal flow that space is empty
+   canvas, so the cap is invisible until it is needed. */
+.bulk-bar::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -14px;
+  height: 14px;
+  background: var(--canvas);
+}
+.bulk-count {
+  font-size: 13px;
+  color: var(--secondary);
+}
+.bulk-count b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bulk-actions .secondary-button {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .track-table.selecting .song-row,
+  .track-table.selecting .track-table-heading {
+    grid-template-columns: 24px 24px minmax(90px, 1.5fr) 36px 22px;
+  }
+  .track-table.selecting .track-album-column,
+  .track-table.selecting .track-format-column {
+    display: none;
+  }
+  .bulk-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .bulk-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* Collapsible navigation rail. Above 640px the sidebar shrinks to an
+   icon-only rail; below it the sidebar is already a drawer, so the collapse
+   control stays hidden and the drawer keeps its full width. */
+:root {
+  --sidebar-rail-width: 68px;
+  --sidebar-motion: 0.32s cubic-bezier(0.33, 1, 0.68, 1);
+}
+.library-sidebar {
+  overflow: hidden;
+  transition:
+    flex-basis var(--sidebar-motion),
+    margin var(--sidebar-motion),
+    padding var(--sidebar-motion),
+    border-radius var(--sidebar-motion);
+}
+.sidebar-collapse-button {
+  display: none;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+}
+.library-sidebar nav > button > span,
+.library-sidebar nav .sidebar-pin-open > span,
+.library-sidebar nav h2 {
+  max-width: 220px;
+}
+.library-sidebar nav > button > span,
+.library-sidebar nav .sidebar-pin-open > span,
+.library-sidebar nav h2,
+.sidebar-brand > span,
+.sidebar-brand .beta-brand-label,
+.sidebar-search kbd,
+.sidebar-search-button > span,
+.settings-button > span,
+.settings-button-chevron,
+.account-button > span {
+  transition:
+    opacity 0.16s ease,
+    max-width var(--sidebar-motion);
+}
+/* The brand text is the only label that also needs its height collapsed, so
+   the rail's bolt and expand control can sit close together. */
+.sidebar-brand > span,
+.sidebar-brand .beta-brand-label {
+  max-height: 30px;
+  transition:
+    opacity 0.16s ease,
+    max-width var(--sidebar-motion),
+    max-height var(--sidebar-motion);
+}
+.sidebar-source-link,
+.version-switch-link {
+  max-height: 34px;
+  transition:
+    opacity 0.16s ease,
+    max-height var(--sidebar-motion),
+    margin var(--sidebar-motion);
+}
+@media (min-width: 641px) {
+  .sidebar-collapse-button {
+    display: flex;
+    margin-left: auto;
+  }
+  .sidebar-collapsed .library-sidebar {
+    flex-basis: var(--sidebar-rail-width);
+    padding-inline: 9px;
+  }
+  .sidebar-collapsed .library-sidebar nav > button,
+  .sidebar-collapsed .library-sidebar nav .sidebar-pin-open {
+    gap: 0;
+    justify-content: center;
+    padding-inline: 0;
+  }
+  .sidebar-collapsed .sidebar-brand {
+    flex-direction: column;
+    gap: 4px;
+    height: auto;
+    margin: 0 0 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  /* The rail has vertical room, so the expand control sits under the bolt. */
+  .sidebar-collapsed .sidebar-brand .brand-bolt {
+    width: 23px;
+    height: 23px;
+  }
+  .sidebar-collapsed .sidebar-collapse-button {
+    margin-left: 0;
+    color: var(--muted);
+  }
+  .sidebar-collapsed .sidebar-collapse-button:hover {
+    color: var(--text);
+  }
+  /* A thin scrollbar would push the rail icons off-center. */
+  .sidebar-collapsed .library-sidebar nav {
+    scrollbar-width: none;
+  }
+  .sidebar-collapsed .sidebar-brand > span,
+  .sidebar-collapsed .sidebar-brand .beta-brand-label,
+  .sidebar-collapsed .sidebar-brand > span,
+  .sidebar-collapsed .sidebar-brand .beta-brand-label,
+  .sidebar-collapsed .library-sidebar nav > button > span,
+  .sidebar-collapsed .library-sidebar nav .sidebar-pin-open > span,
+  .sidebar-collapsed .sidebar-search kbd,
+  .sidebar-collapsed .sidebar-search-button > span,
+  .sidebar-collapsed .settings-button > span,
+  .sidebar-collapsed .settings-button-chevron,
+  .sidebar-collapsed .account-button > span {
+    max-width: 0;
+    overflow: hidden;
+    opacity: 0;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .sidebar-collapsed .sidebar-brand > span,
+  .sidebar-collapsed .sidebar-brand .beta-brand-label {
+    max-height: 0;
+  }
+  /* Section headings become thin dividers so the groups stay readable. */
+  .sidebar-collapsed .library-sidebar nav h2 {
+    max-width: none;
+    height: 1px;
+    margin: 15px 6px 9px;
+    padding: 0;
+    overflow: hidden;
+    background: var(--line);
+    font-size: 0;
+  }
+  .sidebar-collapsed .sidebar-search-button {
+    gap: 0;
+    justify-content: center;
+    padding-inline: 0;
+  }
+  .sidebar-collapsed .sidebar-pin .icon-button {
+    display: none;
+  }
+  .sidebar-collapsed .settings-button,
+  .sidebar-collapsed .account-button {
+    gap: 0;
+    justify-content: center;
+    padding-inline: 0;
+  }
+  .sidebar-collapsed .sidebar-source-link,
+  .sidebar-collapsed .version-switch-link {
+    max-height: 0;
+    margin-block: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Folder view — a Finder-style browser over the library's on-disk hierarchy.
+   Navidrome exposes each track's path, so the tree is derived from the songs
+   the player already holds. Columns view follows Finder's Miller columns:
+   each column is one folder level, the selected row is tinted, and the
+   deepest column stays in view.
+--------------------------------------------------------------------------- */
+.finder {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 12px;
+  outline: none;
+}
+.finder-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.finder-toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.finder-view-switcher {
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--row);
+}
+.finder-view-switcher button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--secondary);
+}
+.finder-view-switcher button:hover {
+  color: var(--text);
+}
+.finder-view-switcher button.selected {
+  background: var(--hover);
+  color: var(--text);
+}
+.finder-sort select {
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--secondary);
+  font-size: 11px;
+}
+.finder-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  width: 190px;
+  min-height: 27px;
+  padding: 5px 9px;
+  border-radius: 20px;
+  background: var(--sidebar);
+  color: var(--muted);
+}
+.finder-search input {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font-size: 11px;
+}
+.finder-search:focus-within {
+  outline: 1px solid var(--accent);
+}
+.finder-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 232px;
+  gap: 14px;
+  min-height: 0;
+}
+.finder-main {
+  min-width: 0;
+  min-height: 420px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+/* Columns (Miller columns) */
+.finder-columns {
+  display: flex;
+  height: 100%;
+  min-height: 420px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.finder-column {
+  flex: 0 0 232px;
+  min-width: 232px;
+  padding: 6px;
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.finder-column:last-child {
+  border-right: 0;
+}
+.finder-column-empty {
+  margin: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.finder-folder,
+.finder-song {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 7px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text);
+}
+.finder-folder:hover,
+.finder-song:hover {
+  background: var(--hover);
+}
+.finder-folder.selected {
+  background: var(--selection);
+  color: var(--accent);
+}
+.finder-folder > svg:first-child {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.finder-folder-name,
+.finder-song-copy {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.finder-folder-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+.finder-folder-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.finder-song .artwork {
+  flex: 0 0 auto;
+  width: 22px;
+  border-radius: 4px;
+}
+.finder-song-copy {
+  display: flex;
+  flex-direction: column;
+}
+.finder-song-copy b {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.finder-song-copy small {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.finder-song-time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+/* List view */
+.finder-list {
+  padding: 6px;
+}
+.finder-list-heading,
+.finder-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.4fr) 1fr 0.7fr 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.finder-list-heading {
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  font-weight: 500;
+}
+.finder-list-row {
+  border-radius: 6px;
+  color: var(--secondary);
+}
+.finder-list-row:hover {
+  background: var(--hover);
+}
+.finder-list-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+}
+.finder-list-name > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.finder-list-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Icons view */
+.finder-icons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+.finder-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 11px;
+  text-align: center;
+}
+.finder-icon:hover {
+  background: var(--hover);
+}
+.finder-icon > svg {
+  color: var(--accent);
+}
+.finder-icon .artwork {
+  width: 100%;
+  border-radius: 6px;
+}
+.finder-icon > span {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.finder-icon > small {
+  color: var(--muted);
+  font-size: 10px;
+}
+/* Preview pane */
+.finder-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 20px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: center;
+}
+.finder-preview-icon {
+  color: var(--accent);
+}
+.finder-preview h2 {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.finder-preview-kind {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.finder-preview-meta {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  margin: 12px 0;
+}
+.finder-preview-meta div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+.finder-preview-meta dt {
+  color: var(--muted);
+}
+.finder-preview-meta dd {
+  margin: 0;
+  color: var(--text);
+}
+.finder-preview-actions .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.finder-preview-songs {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  margin-top: 14px;
+  text-align: left;
+}
+.finder-preview-songs h3 {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.finder-preview-songs button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  color: var(--secondary);
+  font-size: 11px;
+  text-align: left;
+}
+.finder-preview-songs button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.finder-preview-songs button > svg {
+  flex: 0 0 auto;
+}
+.finder-preview-songs button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.finder-preview-songs small {
+  color: var(--muted);
+  font-size: 10px;
+}
+/* Search results */
+.finder-search-results {
+  display: grid;
+  gap: 20px;
+}
+.finder-result-group h3 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.finder-result-list {
+  display: grid;
+  gap: 2px;
+}
+.finder-result {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1.4fr) minmax(0, 1.6fr) minmax(0, 0.8fr);
+  gap: 10px;
+  align-items: center;
+  padding: 7px 9px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+}
+.finder-result:hover {
+  background: var(--hover);
+}
+.finder-result > svg {
+  color: var(--accent);
+}
+.finder-result-name,
+.finder-result-path,
+.finder-result-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.finder-result-path,
+.finder-result-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+/* Path bar, like Finder's breadcrumb at the bottom of the window. */
+.finder-path {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.finder-path button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  color: var(--secondary);
+  font-size: 11px;
+}
+.finder-path button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.finder-path button.current {
+  color: var(--text);
+  font-weight: 500;
+}
+.finder-path-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+}
+@media (max-width: 900px) {
+  .finder-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .finder-preview {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .finder-search {
+    width: 100%;
+    margin-left: 0;
+  }
+  .finder-column {
+    flex-basis: 200px;
+    min-width: 200px;
+  }
+  .finder-list-heading,
+  .finder-list-row {
+    grid-template-columns: minmax(0, 1fr) 0.8fr;
+  }
+  .finder-list-heading > span:nth-child(3),
+  .finder-list-heading > span:nth-child(4),
+  .finder-list-row > span:nth-child(3),
+  .finder-list-row > span:nth-child(4) {
+    display: none;
   }
 }

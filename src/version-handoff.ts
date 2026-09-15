@@ -2,6 +2,15 @@ const VERSION_HANDOFF_REQUEST = "volta-version-handoff-request";
 const VERSION_HANDOFF_STATE = "volta-version-handoff-state";
 const HANDOFF_COMPLETE_KEY = "volta-version-handoff-complete";
 
+// The stable and beta channels are separate origins. Preferences and playback
+// state can cross that boundary, but bearer credentials must not.
+const HANDOFF_EXCLUDED_KEYS = new Set([
+  "volta-accounts",
+  "volta-remembered-credentials",
+  "volta-session-credentials",
+  "volta-password",
+]);
+
 const VERSION_HOSTS = new Set([
   "player.ayois.gay",
   "player.voltamusic.xyz",
@@ -19,10 +28,25 @@ const alternateVersionOrigin = () => {
   return url.origin;
 };
 
+export function alternateVersion(): { url: string; label: string } | null {
+  const origin = alternateVersionOrigin();
+  if (!origin) return null;
+  const onBeta = window.location.hostname.startsWith("beta-");
+  return {
+    url: origin,
+    label: onBeta ? "Switch to the stable version" : "Switch to the beta version",
+  };
+}
+
 const readVoltaStorage = (storage: Storage) =>
   Object.fromEntries(
     Array.from({ length: storage.length }, (_, index) => storage.key(index))
-      .filter((key): key is string => Boolean(key?.startsWith("volta-")))
+      .filter(
+        (key): key is string =>
+          key !== null &&
+          key.startsWith("volta-") &&
+          !HANDOFF_EXCLUDED_KEYS.has(key),
+      )
       .map((key) => [key, storage.getItem(key) || ""]),
   );
 

@@ -1,0 +1,4 @@
+Contact: https://github.com/countervolts/Volta-Player/security/advisories/new
+Expires: 2027-09-13T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://player.voltamusic.xyz/.well-known/security.txt

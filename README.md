@@ -1,7 +1,6 @@
 ## Volta Player
 
 Volta Player is a web music player (and self-hosted) for Navidrome and local music.
-
 ## showcase
 
 <table>

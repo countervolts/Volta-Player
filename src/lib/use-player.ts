@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { isLocalSong, Navidrome, type Song } from "./navidrome";
+import {
+  isLocalSong,
+  Navidrome,
+  replayGainFactor,
+  type Song,
+} from "./navidrome";
 import {
   createListeningEvent,
   listeningHistoryKey,
@@ -11,8 +16,16 @@ import {
   type AlacRequest,
   type AlacTrack,
 } from "./alac-playback";
+import {
+  automixEligible,
+  describeAutomixStyle,
+  planAutomixTransition,
+  type AutomixPlan,
+} from "./automix";
+import { analyzeUpcoming, cachedAnalysis } from "./automix-analyzer";
 
 export type Repeat = "off" | "all" | "one";
+export type NormalizationMode = "off" | "track" | "album";
 export type PlaybackSession = {
   queue: Song[];
   currentIndex: number;
@@ -22,6 +35,11 @@ export type PlaybackSession = {
   original: boolean;
   wasPlaying: boolean;
 };
+export type VolumePreference = {
+  volume: number;
+  muted: boolean;
+  previousVolume: number;
+};
 type PlayerState = {
   queue: Song[];
   currentIndex: number;
@@ -30,10 +48,19 @@ type PlayerState = {
   currentTime: number;
   duration: number;
   volume: number;
+  muted: boolean;
+  previousVolume: number;
   original: boolean;
   activeStream: "original" | "compatible";
   shuffle: boolean;
   repeat: Repeat;
+  /** AutoMix replaces the fixed crossfade when enabled. */
+  automix: boolean;
+  /**
+   * Non-null while an AutoMix transition is blending, so Now Playing can show
+   * the same "Mixing" indicator Apple Music shows.
+   */
+  automixLabel: string | null;
 };
 type Entry = { key: number; song: Song };
 type Listen = {
@@ -64,6 +91,7 @@ type WarmDeck = {
 const WARM_DECK_COUNT = 2;
 const HANDOFF_LEAD_SECONDS = 0.01;
 const HANDOFF_POLL_MS = 4;
+const CROSSFADE_POLL_MS = 16;
 const LISTENING_SESSION_GAP_MS = 20 * 60 * 1000;
 let listeningSessionSequence = 0;
 
@@ -80,6 +108,20 @@ const shuffled = <T>(items: T[]): T[] => {
   return result;
 };
 
+/**
+ * Overlay a measured AutoMix analysis onto a song.
+ *
+ * Analysis is produced asynchronously and cached outside the queue, so it is
+ * merged at plan time instead of being written back into the queue. That keeps
+ * `queue` referentially stable, which matters because it is a React dependency
+ * in several effects.
+ */
+const withAnalysis = (song: Song, key: string): Song => {
+  if (song.analysis) return song;
+  const analysis = cachedAnalysis(key);
+  return analysis ? { ...song, analysis } : song;
+};
+
 // The controller owns transient audio state. React receives only display changes;
 // events and Media Session actions always read the current queue and source.
 class PlaybackController {
@@ -91,10 +133,14 @@ class PlaybackController {
     currentTime: 0,
     duration: 0,
     volume: 0.8,
+    muted: false,
+    previousVolume: 0.8,
     original: true,
     activeStream: "original",
     shuffle: false,
     repeat: "off",
+    automix: false,
+    automixLabel: null,
   };
   private listeners = new Set<() => void>();
   private audio: HTMLAudioElement | null = null;
@@ -104,12 +150,17 @@ class PlaybackController {
   private entryKey = 0;
   private sourceVersion = 0;
   private playVersion = 0;
+  /** A pause can arrive after WebKit has already accepted a newer Play. */
+  private expectedNativePause: HTMLAudioElement | null = null;
+  /** WebKit can abort exactly one resumed play while its pause settles. */
+  private resumeAbortRetries = 0;
   private reportedErrorVersion = -1;
   private desiredPlaying = false;
   private pendingSeek: number | null = null;
   private listen: Listen | null = null;
   private handoffTimer: number | null = null;
   private loadTimer: number | null = null;
+  private resumeRecoveryTimer: number | null = null;
   private compatibleFallbackUsed = false;
   private usingAlacDecoder = false;
   private readonly nativeAlacFallbackSongs = new Set<string>();
@@ -120,6 +171,19 @@ class PlaybackController {
   // avoids a new request and metadata wait at the boundary.
   private standby: WarmDeck[] = [];
   private alac: AlacPlayback;
+  private normalization: NormalizationMode = "off";
+  private crossfadeSeconds = 0;
+  private crossfadeTimer: number | null = null;
+  /**
+   * The deck currently fading in. It is removed from `standby` for the duration
+   * of the blend, so it is tracked separately: a cancelled blend must stop it,
+   * otherwise it keeps playing under the next track forever.
+   */
+  private blendingDeck: HTMLAudioElement | null = null;
+  private blendState: { standby: WarmDeck; progress: number; curve: "linear" | "equal-power" } | null = null;
+  private failedBlendKey: number | null = null;
+  private tempoReleaseTimer: number | null = null;
+  private tempoReleaseDeck: HTMLAudioElement | null = null;
   private listeningSessionId = "";
   private listeningSessionIndex = -1;
   private lastListeningActivity = 0;
@@ -182,6 +246,16 @@ class PlaybackController {
       ? this.alac.currentTime()
       : this.audio?.currentTime ?? this.state.currentTime;
   }
+
+  /**
+   * Playback position in seconds, straight from the decoder.
+   *
+   * `state.currentTime` is quantised to a quarter second for rendering, which
+   * is too coarse to fill a lyric word across its own duration, so word-by-word
+   * lyrics read the live position per animation frame instead. Declared as a
+   * bound field because the hook hands these out detached from the instance.
+   */
+  position = (): number => this.playbackTime();
 
   private playbackDuration() {
     return this.usingAlacDecoder
@@ -321,6 +395,66 @@ class PlaybackController {
     }
   }
 
+  private clearResumeRecovery() {
+    if (this.resumeRecoveryTimer !== null) {
+      window.clearTimeout(this.resumeRecoveryTimer);
+      this.resumeRecoveryTimer = null;
+    }
+  }
+
+  private pauseMainAudio(audio = this.audio) {
+    if (!audio) return;
+    if (audio === this.audio && !audio.paused && !audio.ended)
+      this.expectedNativePause = audio;
+    audio.pause();
+  }
+
+  private useCompatibleFallback() {
+    const audio = this.audio;
+    const song = this.current;
+    if (
+      !audio ||
+      !song ||
+      !this.state.original ||
+      this.compatibleFallbackUsed ||
+      !this.client ||
+      isLocalSong(song)
+    )
+      return false;
+    this.clearResumeRecovery();
+    this.compatibleFallbackUsed = true;
+    this.sourceVersion++;
+    this.playVersion++;
+    this.pauseMainAudio(audio);
+    audio.src = this.client.stream(song, false);
+    audio.load();
+    this.update({ activeStream: "compatible", loading: true, playing: false });
+    this.armLoadTimer();
+    this.play();
+    return true;
+  }
+
+  private armResumeRecovery(source: number, request: number) {
+    this.clearResumeRecovery();
+    this.resumeRecoveryTimer = window.setTimeout(() => {
+      this.resumeRecoveryTimer = null;
+      const audio = this.audio;
+      if (
+        !audio ||
+        source !== this.sourceVersion ||
+        request !== this.playVersion ||
+        !this.desiredPlaying ||
+        this.state.playing ||
+        audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+      )
+        return;
+      if (this.useCompatibleFallback()) return;
+      // Compatible streams can also lose their buffer. One fresh request is
+      // preferable to showing an indefinite loading spinner after Resume.
+      this.loadCurrent(this.playbackTime(), true, true);
+    }, 1500);
+  }
+
   private armLoadTimer() {
     this.clearLoadTimer();
     const source = this.sourceVersion;
@@ -331,24 +465,9 @@ class PlaybackController {
       if (!audio || !song || source !== this.sourceVersion || !this.desiredPlaying || audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return;
       if (
         this.state.original &&
-        !this.compatibleFallbackUsed &&
-        this.client &&
-        !isLocalSong(song)
+        !this.compatibleFallbackUsed
       ) {
-        this.compatibleFallbackUsed = true;
-        this.sourceVersion++;
-        this.playVersion++;
-        audio.pause();
-        audio.src = this.client.stream(song, false);
-        audio.load();
-        this.update({
-          activeStream: "compatible",
-          loading: true,
-          playing: false,
-        });
-        this.armLoadTimer();
-        this.play();
-        return;
+        if (this.useCompatibleFallback()) return;
       }
       this.desiredPlaying = false;
       this.update({ loading: false, playing: false });
@@ -530,6 +649,9 @@ class PlaybackController {
     const standby = this.standby;
     this.standby = [];
     standby.forEach((deck) => {
+      // A deck mid-blend is no longer in `standby`; `cancelCrossfade` stops it,
+      // and every teardown path calls that first.
+      if (deck.audio === this.blendingDeck) return;
       deck.audio.removeEventListener("canplay", deck.readyListener);
       deck.audio.removeEventListener("canplaythrough", deck.readyListener);
       deck.audio.pause();
@@ -555,6 +677,10 @@ class PlaybackController {
   }
 
   private primeUpcoming() {
+    // AutoMix needs measured tempo/key for the tracks it is about to blend.
+    // Kicking this off here means the analysis is usually ready by the time
+    // the transition is planned, without ever blocking playback.
+    this.primeAutomixAnalysis();
     if (this.usingAlacDecoder) {
       this.clearStandby();
       const nextIndex = this.automaticNextIndex();
@@ -565,6 +691,11 @@ class PlaybackController {
     if (!this.client) {
       this.clearStandby();
       return;
+    }
+    if (this.blendState) {
+      const next = this.automaticNextIndex();
+      if (next === null || this.entries[next]?.key !== this.blendState.standby.entryKey)
+        this.cancelCrossfade();
     }
     const desired = this.upcomingIndexes()
       .map((index) => ({ index, entry: this.entries[index] }))
@@ -582,10 +713,13 @@ class PlaybackController {
       return keep;
     });
     desired.forEach(({ index, entry }) => {
-      if (this.standby.some((deck) => deck.entryKey === entry.key)) return;
+      if (this.blendState?.standby.entryKey === entry.key) return;
+      const existing = this.standby.find((deck) => deck.entryKey === entry.key);
+      if (existing) { existing.index = index; return; }
       const audio = new Audio();
       audio.preload = "auto";
-      audio.volume = this.state.volume;
+      audio.volume = clamp(
+        this.state.volume * replayGainFactor(entry.song, this.normalization), 0, 1);
       const standby: WarmDeck = {
         index,
         entryKey: entry.key,
@@ -623,6 +757,7 @@ class PlaybackController {
       endKind,
       endKind === "complete" ? "automatic-complete" : "manual-next",
     );
+    this.cancelCrossfade();
     const outgoing = this.audio;
     this.detachPlaybackListeners(outgoing);
     if (outgoing) {
@@ -638,11 +773,12 @@ class PlaybackController {
     this.attachPlaybackListeners(standby.audio);
     this.sourceVersion++;
     this.playVersion++;
+    this.resumeAbortRetries = 0;
     this.compatibleFallbackUsed = false;
     this.pendingSeek = null;
     this.update({
       currentIndex: nextIndex,
-      currentTime: 0,
+      currentTime: finite(standby.audio.currentTime),
       duration: finite(
         standby.audio.duration,
         this.entries[nextIndex].song.duration ?? 0,
@@ -677,14 +813,28 @@ class PlaybackController {
   private checkHandoff = () => {
     const audio = this.audio;
     if (!audio || !this.desiredPlaying || audio.paused || audio.ended) return;
+    // A crossfade already owns the transition to the next track.
+    if (this.crossfadeTimer !== null) return;
     const nextIndex = this.automaticNextIndex();
     if (
       nextIndex === null ||
       !Number.isFinite(audio.duration) ||
-      audio.duration <= 0 ||
-      audio.duration - audio.currentTime > HANDOFF_LEAD_SECONDS
+      audio.duration <= 0
     )
       return;
+    const remaining = audio.duration - audio.currentTime;
+    // AutoMix replaces the fixed crossfade: it plans a per-transition overlap
+    // from tempo and key instead of using one global duration.
+    const plan = this.automixPlan(nextIndex);
+    const overlap = this.state.automix ? (plan?.overlapSeconds ?? 0) : this.crossfadeSeconds;
+    if (
+      overlap > 0 &&
+      !this.usingAlacDecoder &&
+      remaining <= overlap &&
+      this.beginCrossfade(nextIndex, plan)
+    )
+      return;
+    if (remaining > HANDOFF_LEAD_SECONDS) return;
     if (this.promoteStandby(nextIndex, "complete")) this.stopHandoffMonitor();
   };
 
@@ -828,7 +978,9 @@ class PlaybackController {
     const audio = this.audio;
     const song = this.current;
     if (!audio || !song || !this.client) return;
+    this.cancelCrossfade();
     this.sampleListen();
+    this.clearResumeRecovery();
     this.sourceVersion++;
     this.playVersion++;
     this.desiredPlaying = autoplay;
@@ -838,7 +990,7 @@ class PlaybackController {
 
     if (this.shouldUseAlac(song)) {
       this.usingAlacDecoder = true;
-      audio.pause();
+      this.pauseMainAudio(audio);
       this.releaseAudioSource(audio);
       audio.removeAttribute("src");
       audio.load();
@@ -862,7 +1014,7 @@ class PlaybackController {
 
     this.usingAlacDecoder = false;
     this.alac.stop();
-    audio.pause();
+    this.pauseMainAudio(audio);
     this.pendingSeek = Math.max(0, position);
     const source = this.sourceVersion;
     const streamUrl = this.client.stream(song, this.state.original);
@@ -967,6 +1119,12 @@ class PlaybackController {
     });
   };
 
+  restart = () => {
+    if (!this.current) return;
+    this.seek(0);
+    this.play();
+  };
+
   private play = () => {
     const audio = this.audio;
     if (!this.client) return;
@@ -1000,12 +1158,22 @@ class PlaybackController {
     });
     const source = this.sourceVersion;
     const request = ++this.playVersion;
+    if (this.listen?.announced && !this.listen.active)
+      this.armResumeRecovery(source, request);
     void audio
       .play()
       .then(() => {
         if (source !== this.sourceVersion || request !== this.playVersion)
           return;
-        if (!this.desiredPlaying) audio.pause();
+        if (!this.desiredPlaying) {
+          this.pauseMainAudio(audio);
+          return;
+        }
+        // A fulfilled play() promise is the browser's confirmation that media
+        // has started. WebKit can resolve it before (or without promptly
+        // dispatching) playing after a pause/resume cycle, so do not leave the
+        // transport waiting solely for that later event.
+        if (!audio.paused && !this.state.playing) this.didPlay();
       })
       .catch((error: unknown) => {
         if (
@@ -1014,10 +1182,25 @@ class PlaybackController {
           !this.desiredPlaying
         )
           return;
+        if (error instanceof DOMException && error.name === "AbortError") {
+          if (this.resumeAbortRetries++ === 0) {
+            queueMicrotask(() => {
+              if (
+                source === this.sourceVersion &&
+                request === this.playVersion &&
+                this.desiredPlaying
+              )
+                this.play();
+            });
+            return;
+          }
+          this.desiredPlaying = false;
+          this.update({ playing: false, loading: false });
+          this.reportError(this.playbackError());
+          return;
+        }
         this.desiredPlaying = false;
         this.update({ playing: false, loading: false });
-        if (error instanceof DOMException && error.name === "AbortError")
-          return;
         this.reportError(
           error instanceof DOMException && error.name === "NotAllowedError"
             ? "Your browser blocked playback. Press Play to start."
@@ -1029,8 +1212,11 @@ class PlaybackController {
   private pause = () => {
     this.sampleListen();
     this.clearLoadTimer();
+    this.clearResumeRecovery();
     this.desiredPlaying = false;
     this.stopHandoffMonitor();
+    this.cancelCrossfade();
+    this.applyVolume(this.state.volume);
     this.playVersion++;
     if (this.listen) this.listen.active = false;
     if (this.usingAlacDecoder) {
@@ -1041,7 +1227,7 @@ class PlaybackController {
         navigator.mediaSession.playbackState = this.current ? "paused" : "none";
       return;
     }
-    this.audio?.pause();
+    this.pauseMainAudio();
     this.update({ playing: false, loading: false });
     if (navigator.mediaSession)
       navigator.mediaSession.playbackState = this.current ? "paused" : "none";
@@ -1079,6 +1265,8 @@ class PlaybackController {
     const audio = this.audio;
     if (!this.current || !Number.isFinite(seconds)) return;
     this.sampleListen();
+    this.cancelCrossfade();
+    this.failedBlendKey = null;
     const previous = this.playbackTime();
     const position = clamp(
       seconds,
@@ -1114,14 +1302,341 @@ class PlaybackController {
     this.positionState();
   };
 
+  private applyVolume(volume: number) {
+    this.alac.setVolume(volume * this.currentGain());
+    const blend = this.blendState;
+    const progress = blend?.progress ?? 0;
+    const out = blend ? (blend.curve === "linear" ? 1 - progress : Math.cos(progress * Math.PI / 2)) : 1;
+    const into = blend ? (blend.curve === "linear" ? progress : Math.sin(progress * Math.PI / 2)) : 0;
+    if (this.audio) this.audio.volume = clamp(volume * this.deckGain(this.audio) * out, 0, 1);
+    if (blend) blend.standby.audio.volume = clamp(volume * replayGainFactor(
+      this.entries.find(entry => entry.key === blend.standby.entryKey)?.song, this.normalization,
+    ) * into, 0, 1);
+    this.standby.forEach((deck) => {
+      deck.audio.volume = clamp(volume * this.deckGain(deck.audio), 0, 1);
+    });
+  }
+
+  /** ReplayGain factor for the track that owns a given warm deck. */
+  private deckGain(audio: HTMLAudioElement) {
+    if (this.normalization === "off") return 1;
+    const deck = this.standby.find((candidate) => candidate.audio === audio);
+    const song = deck
+      ? this.entries[deck.index]?.song
+      : audio === this.audio
+        ? this.current
+        : undefined;
+    return replayGainFactor(song, this.normalization);
+  }
+
+  private currentGain() {
+    return replayGainFactor(this.current, this.normalization);
+  }
+
+  // Arrow fields stay bound to the controller when App calls them through the
+  // `player` object returned by the hook.
+  setNormalization = (mode: NormalizationMode) => {
+    if (mode === this.normalization) return;
+    this.normalization = mode;
+    this.applyVolume(this.state.volume);
+  };
+
+  setCrossfade = (seconds: number) => {
+    this.crossfadeSeconds = Math.max(0, Math.min(12, seconds));
+    if (!this.crossfadeSeconds && !this.state.automix) this.cancelCrossfade();
+  };
+
+  setAutomix = (enabled: boolean) => {
+    if (enabled === this.state.automix) return;
+    this.update({ automix: enabled, automixLabel: null });
+    if (!enabled) this.cancelCrossfade();
+    else this.primeAutomixAnalysis();
+  };
+
+  private analysisKey(song: Song) {
+    return JSON.stringify([this.client?.server, this.client?.username, song.id,
+      song.duration, song.size, this.state.original]);
+  }
+
+  private automixPlan(nextIndex: number): AutomixPlan | null {
+    if (!this.state.automix) return null;
+    // Only the actual pair matters. Avoid scanning large queues every 4 ms.
+    const from = this.entries[this.state.currentIndex]?.song;
+    const to = this.entries[nextIndex]?.song;
+    if (!from || !to || !automixEligible([from, to]) || from.id === to.id) return null;
+    return planAutomixTransition(
+      withAnalysis(from, this.analysisKey(from)),
+      withAnalysis(to, this.analysisKey(to)),
+      { duration: this.audio?.duration },
+    );
+  }
+
+  private primeAutomixAnalysis() {
+    if (!this.state.automix || !this.client || this.usingAlacDecoder) return;
+    const indexes = [this.state.currentIndex, ...this.upcomingIndexes()];
+    const songs = indexes.map(index => this.entries[index]?.song).filter((song): song is Song => !!song);
+    if (songs.length < 2) return;
+    const client = this.client;
+    const original = this.state.original;
+    analyzeUpcoming(songs, 0, song => client.stream(song, original), 2,
+      song => this.analysisKey(song));
+  }
+
+  /** Stop the blend timer. Does not touch either deck. */
+  private clearCrossfadeTimer() {
+    if (this.crossfadeTimer === null) return;
+    window.clearInterval(this.crossfadeTimer);
+    this.crossfadeTimer = null;
+  }
+
+  /**
+   * Abandon a blend in progress.
+   *
+   * The incoming deck was removed from `standby` for the blend, so it is not
+   * covered by `clearStandby`. It must be stopped explicitly: leaving it
+   * playing would keep the half-blended track audible underneath the outgoing
+   * one for the rest of the session.
+   */
+  private cancelCrossfade() {
+    this.clearCrossfadeTimer();
+    const blend = this.blendState;
+    this.blendState = null;
+    this.blendingDeck = null;
+    if (blend) {
+      const deck = blend.standby;
+      deck.audio.pause();
+      this.releaseAutomixTempo(deck.audio);
+      // Return a cancelled deck to the warm pool so pause/seek does not leave
+      // the next track cold. Queue edits will discard it through primeUpcoming.
+      const index = this.entries.findIndex(entry => entry.key === deck.entryKey);
+      if (index >= 0) {
+        deck.index = index;
+        try { deck.audio.currentTime = 0; } catch { /* Not seekable yet. */ }
+        this.standby.push(deck);
+      } else {
+        deck.audio.removeEventListener("canplay", deck.readyListener);
+        deck.audio.removeEventListener("canplaythrough", deck.readyListener);
+        this.releaseAudioSource(deck.audio);
+        deck.audio.removeAttribute("src");
+        deck.audio.load();
+      }
+    }
+    this.releaseAutomixTempo(this.tempoReleaseDeck);
+    this.applyVolume(this.state.volume);
+    if (this.state.automixLabel !== null) this.update({ automixLabel: null });
+  }
+
+  /**
+   * Release an AutoMix tempo nudge from a deck.
+   *
+   * The nudge is only a few percent, but leaving it applied would make the
+   * whole track play at the wrong speed, so it must be cleared from the exact
+   * element that received it. `finishCrossfade` promotes a different deck than
+   * `this.audio`, so the element is passed in rather than inferred.
+   */
+  private releaseAutomixTempo(audio: HTMLAudioElement | null = this.audio) {
+    if (audio && this.tempoReleaseDeck === audio) {
+      if (this.tempoReleaseTimer !== null) window.clearInterval(this.tempoReleaseTimer);
+      this.tempoReleaseTimer = null;
+      this.tempoReleaseDeck = null;
+    }
+    if (!audio || audio.playbackRate === 1) return;
+    try {
+      audio.playbackRate = 1;
+    } catch {
+      /* Rate control is optional. */
+    }
+  }
+
+  /** Ease back over four seconds of media time, after the overlap ends. */
+  private easeAutomixTempo(audio: HTMLAudioElement) {
+    if (audio.playbackRate === 1) return;
+    const initial = audio.playbackRate;
+    const start = audio.currentTime;
+    this.tempoReleaseDeck = audio;
+    this.tempoReleaseTimer = window.setInterval(() => {
+      if (audio !== this.audio || audio.paused || audio.ended) {
+        this.releaseAutomixTempo(audio);
+        return;
+      }
+      const p = clamp((audio.currentTime - start) / 4, 0, 1);
+      audio.playbackRate = initial + (1 - initial) * p * p * (3 - 2 * p);
+      if (p >= 1) this.releaseAutomixTempo(audio);
+    }, CROSSFADE_POLL_MS);
+  }
+
+  private beginCrossfade(nextIndex: number, plan: AutomixPlan | null = null) {
+    const standby = this.standby.find(deck => deck.index === nextIndex);
+    const outgoing = this.audio;
+    if (!standby || !standby.ready || !outgoing || outgoing.seeking ||
+        standby.audio.seeking || this.crossfadeTimer !== null ||
+        standby.entryKey === this.failedBlendKey ||
+        standby.entryKey !== this.entries[nextIndex]?.key) return false;
+    let seconds = Math.min(plan?.overlapSeconds ?? this.crossfadeSeconds,
+      outgoing.duration - outgoing.currentTime,
+      Number.isFinite(standby.audio.duration) ? standby.audio.duration / 2 : Infinity);
+    if (seconds < 0.1) return false;
+    // A late seek/load misses the measured launch phase. Keep the dissolve,
+    // but never claim a beat match or change speed on that late launch.
+    const aligned = plan?.style === "beatmatch" && plan.outgoingStartSeconds !== undefined &&
+      Math.abs(outgoing.currentTime - plan.outgoingStartSeconds) < 0.04;
+    this.releaseAutomixTempo(outgoing);
+    try {
+      standby.audio.currentTime = 0;
+      const canPreservePitch = "preservesPitch" in standby.audio;
+      if (canPreservePitch) standby.audio.preservesPitch = true;
+      standby.audio.playbackRate = aligned && canPreservePitch ? plan!.tempoRatio : 1;
+    } catch { this.releaseAutomixTempo(standby.audio); }
+    // Silence BEFORE play(): previously the first 50 ms played at full gain.
+    standby.audio.volume = 0;
+    this.standby = this.standby.filter(deck => deck !== standby);
+    this.blendingDeck = standby.audio;
+    const blend = { standby, progress: 0, curve: plan?.curve ?? "equal-power" as const };
+    this.blendState = blend;
+    let started = false;
+    let startPosition = outgoing.currentTime;
+    let lastIncomingTime = 0;
+    let lastMovement = performance.now();
+    const attemptStarted = lastMovement;
+    const fail = () => {
+      if (this.blendState !== blend) return;
+      this.failedBlendKey = standby.entryKey;
+      this.cancelCrossfade();
+      if (outgoing.ended && this.desiredPlaying) this.ended();
+    };
+    this.crossfadeTimer = window.setInterval(() => {
+      if (this.blendState !== blend) return;
+      const next = this.automaticNextIndex();
+      if (!this.desiredPlaying || next === null || this.entries[next]?.key !== standby.entryKey) {
+        fail(); return;
+      }
+      const now = performance.now();
+      if (!started) {
+        if (now - attemptStarted > 1500) fail();
+        return;
+      }
+      if (standby.audio.currentTime > lastIncomingTime) {
+        lastIncomingTime = standby.audio.currentTime;
+        lastMovement = now;
+      }
+      if (standby.audio.error || standby.audio.ended || now - lastMovement > 500) {
+        fail(); return;
+      }
+      if (!outgoing.ended && outgoing.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+        fail(); return;
+      }
+      if (standby.audio.paused || standby.audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
+      // Fade follows media progress, so a stalled decoder cannot silently
+      // consume the fade in wall time. Never stretch beyond the outgoing end.
+      const elapsed = Math.min(Math.max(0, outgoing.currentTime - startPosition),
+        standby.audio.currentTime / standby.audio.playbackRate);
+      blend.progress = outgoing.ended ? 1 : clamp(elapsed / seconds, 0, 1);
+      this.applyVolume(this.state.volume);
+      if (blend.progress < 1) return;
+      this.clearCrossfadeTimer();
+      this.blendingDeck = null;
+      this.blendState = null;
+      this.update({ automixLabel: null });
+      this.finishCrossfade(outgoing, standby, next);
+    }, CROSSFADE_POLL_MS);
+    void standby.audio.play().then(() => {
+      if (this.blendState !== blend) return;
+      started = true;
+      startPosition = outgoing.currentTime;
+      seconds = Math.max(0.01, Math.min(seconds, outgoing.duration - startPosition));
+      lastMovement = performance.now();
+      // HTML media start latency can invalidate phase alignment. Abandon the
+      // tempo nudge if play() was delayed beyond the timing tolerance.
+      const onBeat = aligned && Math.abs(startPosition - plan!.outgoingStartSeconds!) < 0.04 &&
+        Math.abs(standby.audio.playbackRate - plan!.tempoRatio) < 1e-6;
+      if (!onBeat) this.releaseAutomixTempo(standby.audio);
+      if (plan) this.update({ automixLabel: onBeat
+        ? `${describeAutomixStyle(plan.style)} · ${plan.reason}`
+        : "Crossfade · Gentle blend at original tempo" });
+    }).catch(fail);
+    return true;
+  }
+
+  private finishCrossfade(
+    outgoing: HTMLAudioElement,
+    standby: WarmDeck,
+    nextIndex: number,
+  ) {
+    this.finishListening("complete", "crossfade");
+    this.detachPlaybackListeners(outgoing);
+    outgoing.pause();
+    this.releaseAudioSource(outgoing);
+    outgoing.removeAttribute("src");
+    outgoing.load();
+    standby.audio.removeEventListener("canplay", standby.readyListener);
+    standby.audio.removeEventListener("canplaythrough", standby.readyListener);
+    // Promote without pausing, then ease the incoming tempo back to normal.
+    this.audio = standby.audio;
+    this.attachPlaybackListeners(standby.audio);
+    this.sourceVersion++;
+    this.playVersion++;
+    this.compatibleFallbackUsed = false;
+    this.pendingSeek = null;
+    this.update({
+      currentIndex: nextIndex,
+      currentTime: finite(standby.audio.currentTime),
+      duration: finite(
+        standby.audio.duration,
+        this.entries[nextIndex].song.duration ?? 0,
+      ),
+      playing: true,
+      loading: false,
+      activeStream: this.state.original ? "original" : "compatible",
+    });
+    this.applyVolume(this.state.volume);
+    this.easeAutomixTempo(standby.audio);
+    this.resetListen();
+    this.baseline();
+    this.clearLoadTimer();
+    this.setMetadata();
+    this.primeUpcoming();
+    this.positionState();
+    // The incoming `playing` event happened before its listeners were attached.
+    // Activate listening/scrobbling explicitly for the promoted track.
+    this.didPlay();
+  }
+
   setVolume = (value: number) => {
     const volume = clamp(finite(value, this.state.volume), 0, 1);
-    this.alac.setVolume(volume);
-    if (this.audio) this.audio.volume = volume;
-    this.standby.forEach((deck) => {
-      deck.audio.volume = volume;
+    const previousVolume =
+      volume > 0
+        ? volume
+        : this.state.volume > 0
+          ? this.state.volume
+          : this.state.previousVolume;
+    this.applyVolume(volume);
+    this.update({
+      volume,
+      muted: volume === 0,
+      previousVolume,
     });
-    this.update({ volume });
+  };
+
+  restoreVolume = (preference: VolumePreference) => {
+    const volume = clamp(finite(preference.volume, 0.8), 0, 1);
+    const previousVolume = clamp(
+      finite(preference.previousVolume, volume || 0.8),
+      Number.EPSILON,
+      1,
+    );
+    const muted = Boolean(preference.muted) || volume === 0;
+    this.applyVolume(muted ? 0 : volume);
+    this.update({
+      volume: muted ? 0 : volume,
+      muted,
+      previousVolume: volume > 0 ? volume : previousVolume,
+    });
+  };
+
+  toggleMute = () => {
+    if (this.state.muted || this.state.volume === 0)
+      this.setVolume(this.state.previousVolume);
+    else this.setVolume(0);
   };
 
   setOriginal = (original: boolean) => {
@@ -1248,7 +1763,9 @@ class PlaybackController {
     this.alac.stop();
     this.usingAlacDecoder = false;
     this.stopHandoffMonitor();
+    this.cancelCrossfade();
     this.clearLoadTimer();
+    this.clearResumeRecovery();
     this.sourceVersion++;
     this.playVersion++;
     this.listen = null;
@@ -1257,7 +1774,7 @@ class PlaybackController {
     this.entries = [];
     this.orderedEntries = [];
     if (this.audio) {
-      this.audio.pause();
+      this.pauseMainAudio(this.audio);
       this.releaseAudioSource(this.audio);
       this.audio.removeAttribute("src");
       this.audio.load();
@@ -1319,12 +1836,15 @@ class PlaybackController {
 
   private didPlay = () => {
     if (!this.desiredPlaying) {
-      this.audio?.pause();
+      this.pauseMainAudio();
       return;
     }
     this.baseline();
+    this.resumeAbortRetries = 0;
     this.clearLoadTimer();
+    this.clearResumeRecovery();
     if (this.listen) {
+      const wasActive = this.listen.active;
       this.listen.active = true;
       if (!this.listen.announced) {
         this.listen.announced = true;
@@ -1333,7 +1853,7 @@ class PlaybackController {
           void this.listen.client.scrobble(this.listen.song, false).catch(() => {
             /* Playback can continue offline. */
           });
-      } else {
+      } else if (!wasActive) {
         this.emitListeningEvent("resume", "resume");
       }
     }
@@ -1347,9 +1867,19 @@ class PlaybackController {
   private didPause = () => {
     // Ignore queued events from an old source that has already resumed.
     // End-of-track pause is handled by ended so it can advance the queue.
-    if (!this.audio?.paused || this.audio.ended) return;
+    const audio = this.audio;
+    if (!audio?.paused || audio.ended) return;
+    const wasExpected = this.expectedNativePause === audio;
+    if (wasExpected) this.expectedNativePause = null;
+    if (wasExpected && this.desiredPlaying) {
+      // A pause requested before the newest Play arrived late. Reissuing the
+      // current intent is safe and preserves an explicit user resume.
+      this.play();
+      return;
+    }
     this.finishListening("pause", "pause");
     this.clearLoadTimer();
+    this.clearResumeRecovery();
     this.desiredPlaying = false;
     this.stopHandoffMonitor();
     this.playVersion++;
@@ -1383,6 +1913,8 @@ class PlaybackController {
 
   private ended = () => {
     if (!this.desiredPlaying) return;
+    // The crossfade will complete the transition on its own timer.
+    if (this.crossfadeTimer !== null) return;
     const nextIndex = this.automaticNextIndex();
     if (nextIndex === null) {
       this.finishListening("complete", "ended");
@@ -1516,12 +2048,19 @@ export function usePlayer(
     playSongs: controller.playSongs,
     restoreSession: controller.restoreSession,
     restoreSong: controller.restoreSong,
+    restart: controller.restart,
     toggle: controller.toggle,
     previous: controller.previous,
     next: controller.next,
     seek: controller.seek,
+    position: controller.position,
     setVolume: controller.setVolume,
+    restoreVolume: controller.restoreVolume,
+    toggleMute: controller.toggleMute,
     setOriginal: controller.setOriginal,
+    setNormalization: controller.setNormalization,
+    setCrossfade: controller.setCrossfade,
+    setAutomix: controller.setAutomix,
     toggleShuffle: controller.toggleShuffle,
     cycleRepeat: controller.cycleRepeat,
     jumpTo: controller.jumpTo,
