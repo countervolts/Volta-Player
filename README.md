@@ -25,4 +25,4 @@ Volta Player is a web music player (and self-hosted) for Navidrome and local mus
 docker compose -f docker/compose.yaml up -d --build
 ```
 
-Open <http://localhost:8080> and connect your Navidrome server or local files.
+also check out [Volta iOS](https://github.com/countervolts/Volta)
