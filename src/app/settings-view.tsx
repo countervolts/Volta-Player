@@ -82,6 +82,7 @@ type Props = {
   connect: (credentials: Credentials, rememberMe?: boolean) => void | Promise<void>;
   connecting: boolean;
   crossfadeSeconds: number;
+  volumeScrollStep: number;
   disconnect: () => void;
   engagementEvents: EngagementEvent[];
   experimentalArtworkLoading: boolean;
@@ -108,6 +109,7 @@ type Props = {
   setAnimatedArtwork: Setter<boolean>;
   setAnimateArtworkEverywhere: Setter<boolean>;
   setCrossfadeSeconds: Setter<number>;
+  setVolumeScrollStep: Setter<number>;
   setExperimentalArtworkLoading: Setter<boolean>;
   setExternalLyricsEnabled: Setter<boolean>;
   setLyricsBlurEnabled: Setter<boolean>;
@@ -201,6 +203,7 @@ export function SettingsView({
   connect,
   connecting,
   crossfadeSeconds,
+  volumeScrollStep,
   disconnect,
   engagementEvents,
   experimentalArtworkLoading,
@@ -226,6 +229,7 @@ export function SettingsView({
   setAnimatedArtwork,
   setAnimateArtworkEverywhere,
   setCrossfadeSeconds,
+  setVolumeScrollStep,
   setExperimentalArtworkLoading,
   setExternalLyricsEnabled,
   setLyricsBlurEnabled,
@@ -674,6 +678,36 @@ export function SettingsView({
                             </span>
                           </div>
                         )}
+                        <div className="setting-row setting-toggle">
+                          <SettingIcon tone="green">
+                            <Volume2 size={16} />
+                          </SettingIcon>
+                          <span className="setting-copy">
+                            <b>Volume scroll step</b>
+                            <small>Change the volume by this percentage with each scroll</small>
+                          </span>
+                          <span className="setting-stepper" aria-label="Volume scroll step">
+                            <button
+                              type="button"
+                              aria-label="Decrease volume scroll step"
+                              onClick={() =>
+                                setVolumeScrollStep((value) => Math.max(1, value - 1))
+                              }
+                            >
+                              −
+                            </button>
+                            <output>{volumeScrollStep}%</output>
+                            <button
+                              type="button"
+                              aria-label="Increase volume scroll step"
+                              onClick={() =>
+                                setVolumeScrollStep((value) => Math.min(10, value + 1))
+                              }
+                            >
+                              +
+                            </button>
+                          </span>
+                        </div>
                         <div className="setting-row setting-toggle">
                           <SettingIcon tone="green">
                             <Volume2 size={16} />

@@ -73,6 +73,7 @@ type Props = {
   notice: string;
   setNotice: Setter<string>;
   player: Player;
+  volumeScrollStep: number;
   setFullPlayer: Setter<boolean>;
   playlistDraft: PlaylistDraft | null;
   playlistMutationBusy: boolean;
@@ -138,6 +139,7 @@ export function AppDialogs({
   notice,
   setNotice,
   player,
+  volumeScrollStep,
   setFullPlayer,
   playlistDraft,
   playlistMutationBusy,
@@ -174,6 +176,7 @@ export function AppDialogs({
         <FullPlayer
           client={client}
           player={player}
+          volumeScrollStep={volumeScrollStep}
           onClose={closeFullPlayer}
           onArtist={(artistId, artistName) => {
             setFullPlayer(false);

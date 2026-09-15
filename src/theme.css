@@ -117,7 +117,8 @@ input[type="range"] {
   height: 3px;
   padding: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: 999px;
+  transition: height 140ms ease;
   background: linear-gradient(
     to right,
     var(--secondary) var(--progress),
@@ -127,17 +128,17 @@ input[type="range"] {
 }
 input[type="range"]::-webkit-slider-thumb {
   appearance: none;
-  width: 5px;
-  height: 9px;
-  background: var(--secondary);
-  border-radius: 2px;
+  width: 0;
+  height: 0;
+  background: transparent;
+  border-radius: 0;
 }
 input[type="range"]::-moz-range-thumb {
-  width: 5px;
-  height: 9px;
-  background: var(--secondary);
+  width: 0;
+  height: 0;
+  background: transparent;
   border: 0;
-  border-radius: 2px;
+  border-radius: 0;
 }
 input[type="range"]:disabled {
   cursor: default;
@@ -1842,6 +1843,10 @@ p {
   width: 100%;
   margin: 3px 0 0;
 }
+.seek-control:not(.hover-times):has(input:hover) input,
+.seek-control:not(.hover-times):has(input:focus-visible) input {
+  height: 5px;
+}
 .seek-control input::-webkit-slider-thumb {
   opacity: 0;
 }
@@ -1952,6 +1957,10 @@ p {
 .volume-slider input {
   width: 100%;
 }
+.volume-slider:hover input,
+.volume-slider:has(input:focus-visible) input {
+  height: 5px;
+}
 .volume-value {
   position: absolute;
   left: clamp(17px, var(--volume-position), calc(100% - 17px));
@@ -1973,10 +1982,7 @@ p {
   transform: translate(-50%, 3px);
   transition: opacity 0.12s ease, transform 0.12s ease;
 }
-.dock-volume:hover .volume-value,
-.dock-volume:focus-within .volume-value,
-.fullscreen-volume:hover .volume-value,
-.fullscreen-volume:focus-within .volume-value {
+.volume-slider:hover .volume-value {
   opacity: 1;
   transform: translate(-50%, 0);
 }
