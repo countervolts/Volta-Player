@@ -153,7 +153,7 @@ export function planAutomixTransition(
 }
 
 /**
- * Apple skips AutoMix for a full album played in order, out of respect for the
+ * Skips AutoMix for a full album played in order, out of respect for the
  * artist's intended pacing. Volta mirrors that: a queue that is one album in
  * track order is left alone.
  */
