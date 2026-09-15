@@ -219,6 +219,7 @@ import {
   pinsStorageKey,
   readTransitionMode,
   TRANSITION_MODE_KEY,
+  VOLUME_SCROLL_STEP_KEY,
   type TransitionMode,
   readAccounts,
   readInterfaceScale,
@@ -1392,6 +1393,12 @@ export default function App() {
     const value = Number(safeRead(localStorage, CROSSFADE_KEY));
     return Number.isFinite(value) ? Math.min(12, Math.max(0, value)) : 0;
   });
+  const [volumeScrollStep, setVolumeScrollStep] = useState(() => {
+    const value = Number(safeRead(localStorage, VOLUME_SCROLL_STEP_KEY));
+    return Number.isFinite(value) && value >= 1 && value <= 10
+      ? Math.round(value)
+      : 5;
+  });
   const [transitionMode, setTransitionMode] = useState<TransitionMode>(
     readTransitionMode,
   );
@@ -1635,6 +1642,9 @@ export default function App() {
     safeWrite(localStorage, NORMALIZATION_KEY, normalization);
     player.setNormalization(normalization);
   }, [normalization, player.setNormalization]);
+  useEffect(() => {
+    safeWrite(localStorage, VOLUME_SCROLL_STEP_KEY, String(volumeScrollStep));
+  }, [volumeScrollStep]);
   useEffect(() => {
     safeWrite(
       localStorage,
@@ -5058,6 +5068,7 @@ export default function App() {
                   connect={connect}
                   connecting={connecting}
                   crossfadeSeconds={crossfadeSeconds}
+                  volumeScrollStep={volumeScrollStep}
                   disconnect={disconnect}
                   engagementEvents={engagementEvents}
                   experimentalArtworkLoading={experimentalArtworkLoading}
@@ -5083,6 +5094,7 @@ export default function App() {
                   setAnimatedArtwork={setAnimatedArtwork}
                   setAnimateArtworkEverywhere={setAnimateArtworkEverywhere}
                   setCrossfadeSeconds={setCrossfadeSeconds}
+                  setVolumeScrollStep={setVolumeScrollStep}
                   setExperimentalArtworkLoading={setExperimentalArtworkLoading}
                   setExternalLyricsEnabled={setExternalLyricsEnabled}
                   setLyricsBlurEnabled={setLyricsBlurEnabled}
@@ -5891,6 +5903,7 @@ export default function App() {
         <PlaybackDock
           client={client}
           player={player}
+          volumeScrollStep={volumeScrollStep}
           panel={panel}
           onPanel={(value) => setPanel((old) => (old === value ? null : value))}
           onExpand={openFullPlayer}
@@ -5920,6 +5933,7 @@ export default function App() {
         favorite={favorite}
         filteredShortcuts={filteredShortcuts}
         frameMonitor={frameMonitor}
+        volumeScrollStep={volumeScrollStep}
         fullPlayer={fullPlayer}
         isFavorite={isFavorite}
         listeningEvents={listeningEvents}
