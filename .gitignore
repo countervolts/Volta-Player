@@ -3,6 +3,7 @@ dist/
 docs/
 tests/
 scripts/sync-dev.sh
+scripts/test-webkit-docker.sh
 playwright.config.ts
 test-results/
 playwright-report/

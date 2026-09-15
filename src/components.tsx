@@ -9,20 +9,27 @@ import {
   useContext,
   useMemo,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
+  cloneElement,
+  useId,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import {
   Disc3,
   Ellipsis,
+  GripVertical,
   ListEnd,
   ListMusic,
   ListPlus,
   LoaderCircle,
   Music2,
   Play,
+  Share2,
   Star,
   X,
 } from "lucide-react";
@@ -49,6 +56,7 @@ export type ContextMenuItem =
       label: string;
       icon: ReactNode;
       onSelect: () => void;
+      disabled?: boolean;
     }
   | { separator: true };
 
@@ -57,11 +65,13 @@ export function ContextMenu({
   items,
   label,
   onClose,
+  container,
 }: {
   point: { x: number; y: number } | null;
   items: ContextMenuItem[];
   label: string;
   onClose: () => void;
+  container?: Element | null;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -107,7 +117,9 @@ export function ContextMenu({
             type="button"
             role="menuitem"
             key={item.label}
+            disabled={item.disabled}
             onClick={() => {
+              if (item.disabled) return;
               onClose();
               item.onSelect();
             }}
@@ -118,7 +130,7 @@ export function ContextMenu({
         ),
       )}
     </div>,
-    document.body,
+    container ?? document.body,
   );
 }
 
@@ -167,6 +179,188 @@ export function InfiniteScrollSentinel({
     >
       {loading && <LoaderCircle className="spin" size={22} />}
     </div>
+  );
+}
+
+type TooltipChildProps = {
+  onBlur?: (event: React.FocusEvent<HTMLElement>) => void;
+  onClick?: (event: React.MouseEvent<HTMLElement>) => void;
+  onFocus?: (event: React.FocusEvent<HTMLElement>) => void;
+  onPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerEnter?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
+  "aria-describedby"?: string;
+};
+
+let pointerMoveVersion = 0;
+let pointerTrackerAttached = false;
+const ensurePointerTracker = () => {
+  if (pointerTrackerAttached || typeof window === "undefined") return;
+  pointerTrackerAttached = true;
+  window.addEventListener(
+    "pointermove",
+    () => {
+      pointerMoveVersion += 1;
+    },
+    { passive: true },
+  );
+};
+
+function useTooltip(label: string) {
+  const tooltipId = useId();
+  const mountedPointerVersion = useRef(pointerMoveVersion);
+  const [state, setState] = useState<"closed" | "open" | "leaving">("closed");
+  const [position, setPosition] = useState({
+    left: 0,
+    top: 0,
+    bottom: 0,
+    placement: "above" as "above" | "below",
+  });
+  const tooltipRef = useRef<HTMLSpanElement>(null);
+  const leaveTimer = useRef<number | undefined>(undefined);
+
+  useEffect(() => () => {
+    if (leaveTimer.current !== undefined) window.clearTimeout(leaveTimer.current);
+  }, []);
+
+  const show = useCallback((target: HTMLElement) => {
+    if (leaveTimer.current !== undefined) window.clearTimeout(leaveTimer.current);
+    const rect = target.getBoundingClientRect();
+    setPosition({
+      left: Math.max(14, Math.min(window.innerWidth - 14, rect.left + rect.width / 2)),
+      top: Math.max(8, rect.top - 8),
+      bottom: rect.bottom + 8,
+      placement: "above",
+    });
+    setState("open");
+  }, []);
+
+  useLayoutEffect(() => {
+    if (state === "closed" || !tooltipRef.current) return;
+    const rect = tooltipRef.current.getBoundingClientRect();
+    setPosition((current) => {
+      const left = Math.max(
+        rect.width / 2 + 8,
+        Math.min(window.innerWidth - rect.width / 2 - 8, current.left),
+      );
+      const placement = current.placement === "above" && rect.top < 8
+        ? "below"
+        : current.placement;
+      const top = placement === "below" ? current.bottom : current.top;
+      if (
+        left === current.left &&
+        top === current.top &&
+        placement === current.placement
+      )
+        return current;
+      return { ...current, left, top, placement };
+    });
+  }, [state, position.left, position.placement]);
+
+  const hide = useCallback(() => {
+    if (state === "closed") return;
+    setState("leaving");
+    leaveTimer.current = window.setTimeout(() => setState("closed"), 150);
+  }, [state]);
+
+  const dismiss = useCallback(() => {
+    if (leaveTimer.current !== undefined) window.clearTimeout(leaveTimer.current);
+    setState("closed");
+  }, []);
+
+  useEffect(() => {
+    ensurePointerTracker();
+    const dismissOnWindowLeave = () => dismiss();
+    const dismissWhenHidden = () => {
+      if (document.visibilityState !== "visible") dismiss();
+    };
+    window.addEventListener("blur", dismissOnWindowLeave);
+    document.addEventListener("visibilitychange", dismissWhenHidden);
+    return () => {
+      window.removeEventListener("blur", dismissOnWindowLeave);
+      document.removeEventListener("visibilitychange", dismissWhenHidden);
+    };
+  }, [dismiss]);
+
+  const getTriggerProps = useCallback(
+    (existing: TooltipChildProps) => ({
+      "aria-describedby": state === "open"
+        ? existing["aria-describedby"] || tooltipId
+        : existing["aria-describedby"],
+      onBlur: (event: React.FocusEvent<HTMLElement>) => {
+        existing.onBlur?.(event);
+        hide();
+      },
+      onClick: (event: React.MouseEvent<HTMLElement>) => {
+        // A control can disappear immediately after activation (notably the
+        // full-player close button), so do not leave an exit portal behind.
+        dismiss();
+        existing.onClick?.(event);
+      },
+      onFocus: (event: React.FocusEvent<HTMLElement>) => {
+        existing.onFocus?.(event);
+        // Radix focuses the fullscreen Close button when the dialog opens.
+        // That is programmatic focus, not an intentional keyboard hover.
+        if (event.currentTarget.matches(":focus-visible"))
+          show(event.currentTarget);
+      },
+      onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
+        dismiss();
+        existing.onPointerDown?.(event);
+      },
+      onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => {
+        existing.onPointerEnter?.(event);
+        // A fullscreen surface can mount beneath a stationary pointer. Do
+        // not treat that layout change as a fresh hover; wait for movement.
+        if (pointerMoveVersion === mountedPointerVersion.current) return;
+        show(event.currentTarget);
+      },
+      onPointerLeave: (event: ReactPointerEvent<HTMLElement>) => {
+        existing.onPointerLeave?.(event);
+        hide();
+      },
+    }),
+    [dismiss, hide, show, state, tooltipId],
+  );
+
+  const tooltip = state === "closed"
+    ? null
+    : createPortal(
+        <span
+          ref={tooltipRef}
+          className="volta-tooltip"
+          data-placement={position.placement}
+          data-state={state === "open" ? "open" : "closed"}
+          id={tooltipId}
+          role="tooltip"
+          style={{ left: position.left, top: position.top }}
+        >
+          {label}
+        </span>,
+        document.body,
+      );
+
+  return { getTriggerProps, tooltip };
+}
+
+export function Tooltip({
+  label,
+  children,
+}: {
+  label?: string;
+  children: ReactElement;
+}) {
+  if (!label) return children;
+  const { getTriggerProps, tooltip } = useTooltip(label);
+  const trigger = cloneElement(
+    children,
+    getTriggerProps(children.props as TooltipChildProps),
+  );
+  return (
+    <>
+      {trigger}
+      {tooltip}
+    </>
   );
 }
 
@@ -273,7 +467,7 @@ function retainArtworkBlob(src: string, attempt: number): SharedArtworkBlob {
     })
     .finally(() => {
       if (entry.refs <= 0 && !entry.settled) {
-        sharedArtworkBlobs.delete(key);
+        if (sharedArtworkBlobs.get(key) === entry) sharedArtworkBlobs.delete(key);
         controller.abort();
         if (url) URL.revokeObjectURL(url);
       }
@@ -285,8 +479,10 @@ function retainArtworkBlob(src: string, attempt: number): SharedArtworkBlob {
     if (entry.refs > 0) return;
     entry.lastUsed = performance.now();
     if (!entry.settled || entry.discardWhenReleased) {
-      sharedArtworkBlobs.delete(key);
-      sharedArtworkBytes -= entry.bytes;
+      if (sharedArtworkBlobs.get(key) === entry) {
+        sharedArtworkBlobs.delete(key);
+        sharedArtworkBytes -= entry.bytes;
+      }
       controller.abort();
       entry.blob = undefined;
       if (url) URL.revokeObjectURL(url);
@@ -307,14 +503,15 @@ export function ArtworkMotionProvider({ enabled, everywhere, experimentalLoading
 
 const ExperimentalArtwork = memo(function ExperimentalArtwork({
   id, imageUrl, client, size = 400, className = "", label = "", eager = false,
+  loadEager = false,
 }: {
   id?: string; imageUrl?: string; client: Navidrome; size?: number;
-  className?: string; label?: string; eager?: boolean;
+  className?: string; label?: string; eager?: boolean; loadEager?: boolean;
 }) {
   useEffect(() => {
     void prefetchArtwork(client, id, imageUrl, size);
   }, [client, id, imageUrl, size]);
-  return <StandardArtwork {...{ id, imageUrl, client, size, className, label, eager }} />;
+  return <StandardArtwork {...{ id, imageUrl, client, size, className, label, eager, loadEager }} />;
 });
 
 const ArtworkImage = memo(function ArtworkImage({
@@ -367,13 +564,16 @@ const ArtworkImage = memo(function ArtworkImage({
       };
     }
     const shared = retainArtworkBlob(src, attempt);
+    let cancelled = false;
     let retryTimer: number | undefined;
     shared.promise
       .then(async (objectUrl) => {
+        if (cancelled) return;
         if (!shared.blob) throw new Error("Artwork blob unavailable");
         if (discardAnimated && /image\/(gif|apng|webp)/i.test(shared.blob.type))
           shared.discardWhenReleased = true;
         const replacement = await onType(shared.blob.type, shared.blob);
+        if (cancelled) return;
         if (replacement !== undefined) {
           setResolvedSrc(replacement || "");
           return;
@@ -381,10 +581,12 @@ const ArtworkImage = memo(function ArtworkImage({
         setResolvedSrc(objectUrl);
       })
       .catch(() => {
+        if (cancelled) return;
         if (attempt >= 3) return;
         retryTimer = window.setTimeout(() => setAttempt((value) => value + 1), 250 * 2 ** attempt);
       });
     return () => {
+      cancelled = true;
       shared.release();
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
@@ -406,28 +608,34 @@ const ArtworkImage = memo(function ArtworkImage({
 
 const StandardArtwork = memo(function StandardArtwork({
   id, imageUrl, client, size = 400, className = "", label = "", eager = false,
-}: { id?: string; imageUrl?: string; client: Navidrome; size?: number; className?: string; label?: string; eager?: boolean }) {
+  loadEager = false,
+}: { id?: string; imageUrl?: string; client: Navidrome; size?: number; className?: string; label?: string; eager?: boolean; loadEager?: boolean }) {
   const { enabled, everywhere } = useContext(ArtworkMotionContext);
   const original = imageUrl || client.cover(id);
   const resized = imageUrl || client.cover(id, size);
   const [kind, setKind] = useState<"animated" | "static" | undefined>(original ? undefined : "static");
   const [frozen, setFrozen] = useState("");
-  const [near, setNear] = useState(eager);
+  const [near, setNear] = useState(eager || loadEager);
   const artworkRef = useRef<HTMLDivElement>(null);
-  const active = eager || near;
+  const active = eager || loadEager || near;
   const activeRef = useRef(active);
+  const artworkSourceRef = useRef(resized);
+  artworkSourceRef.current = resized;
   const isLocalArtwork = imageUrl?.startsWith("blob:") || false;
   const animate = enabled && Boolean(original) && (eager || (everywhere && near));
   useEffect(() => {
     activeRef.current = active;
   }, [active]);
   const handleArtworkType = useCallback((type: string, blob?: Blob) => {
+    // A keyed card can be reused as Home and New in Your Library swap their
+    // overlapping albums. Ignore a completion belonging to the old URL.
+    if (artworkSourceRef.current !== resized) return undefined;
     const animated = /image\/(gif|apng|webp)/i.test(type);
     setKind(animated ? "animated" : "static");
     if (animated && blob && !animate && resized) {
       return loadArtworkStill(resized, blob)
         .then((frame) => {
-          if (!activeRef.current) {
+          if (artworkSourceRef.current !== resized || !activeRef.current) {
             discardArtworkStill(resized);
             return null;
           }
@@ -435,7 +643,7 @@ const StandardArtwork = memo(function StandardArtwork({
           return frame;
         })
         .catch(() => {
-          setKind("static");
+          if (artworkSourceRef.current === resized) setKind("static");
           return null;
         });
     }
@@ -462,7 +670,7 @@ const StandardArtwork = memo(function StandardArtwork({
     setFrozen("");
   }, [active, frozen, resized]);
   useEffect(() => {
-    setNear(eager);
+    setNear(eager || loadEager);
     const element = artworkRef.current;
     if (!element || typeof IntersectionObserver === "undefined") return;
     const mainContent = document.querySelector<HTMLElement>(".main-content");
@@ -478,13 +686,17 @@ const StandardArtwork = memo(function StandardArtwork({
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [eager, id, imageUrl]);
+  }, [eager, id, imageUrl, loadEager]);
+  useEffect(() => {
+    setKind(original ? undefined : "static");
+    setFrozen("");
+  }, [original, resized]);
   // Grid: frozen frame only. Prominent views: original animation.
   // Keep loaded artwork visible while frame 2 is being extracted.
   // Swap to static frame only after extraction succeeds.
   const src = animate ? original : kind === "animated" ? frozen || resized : resized;
   return <div ref={artworkRef} data-artwork-id={id || imageUrl || ""} className={`artwork ${className}`}>
-    {src ? <ArtworkImage src={src} alt={label} eager={eager} active={active} discardAnimated={!animate} onType={handleArtworkType} /> : <Music2 aria-hidden="true" />}
+    {src ? <ArtworkImage key={src} src={src} alt={label} eager={eager || loadEager} active={active} discardAnimated={!animate} onType={handleArtworkType} /> : <Music2 aria-hidden="true" />}
   </div>;
 });
 
@@ -498,19 +710,24 @@ export const IconButton = forwardRef<
   React.ButtonHTMLAttributes<HTMLButtonElement> & {
     label: string;
     active?: boolean;
+    tooltip?: string;
   }
->(function IconButton({ label, children, active, ...props }, ref) {
+>(function IconButton({ label, children, active, tooltip, title: _nativeTitle, ...props }, ref) {
+  const { getTriggerProps, tooltip: tooltipContent } = useTooltip(tooltip || label);
   return (
-    <button
-      ref={ref}
-      type="button"
-      className={`icon-button${active ? " active" : ""}`}
-      title={label}
-      aria-label={label}
-      {...props}
-    >
-      {children}
-    </button>
+    <>
+      <button
+        ref={ref}
+        type="button"
+        className={`icon-button${active ? " active" : ""}`}
+        aria-label={label}
+        {...props}
+        {...getTriggerProps(props as TooltipChildProps)}
+      >
+        {children}
+      </button>
+      {tooltipContent}
+    </>
   );
 });
 
@@ -562,6 +779,7 @@ export function SongMenu({
   onAlbum,
   onAddToPlaylist,
   onRemoveFromPlaylist,
+  onShare,
 }: {
   song: Song;
   onQueue: (song: Song, next?: boolean) => void;
@@ -570,6 +788,7 @@ export function SongMenu({
   onAlbum?: (id: string) => void;
   onAddToPlaylist?: (song: Song) => void;
   onRemoveFromPlaylist?: () => void;
+  onShare?: (song: Song) => void;
 }) {
   return (
     <Dropdown.Root>
@@ -579,7 +798,12 @@ export function SongMenu({
         </IconButton>
       </Dropdown.Trigger>
       <Dropdown.Portal>
-        <Dropdown.Content className="context-menu" sideOffset={5} align="end">
+        <Dropdown.Content
+          className="context-menu"
+          sideOffset={5}
+          align="end"
+          onClick={(event) => event.stopPropagation()}
+        >
           <Dropdown.Item onSelect={() => onQueue(song, true)}>
             <ListPlus size={16} />
             Play Next
@@ -599,6 +823,12 @@ export function SongMenu({
             <Star size={16} />
             {favorite ? "Remove Favorite" : "Favorite"}
           </Dropdown.Item>
+          {onShare && (
+            <Dropdown.Item onSelect={() => onShare(song)}>
+              <Share2 size={16} />
+              Copy Share Link
+            </Dropdown.Item>
+          )}
           {onRemoveFromPlaylist && (
             <Dropdown.Item onSelect={onRemoveFromPlaylist}>
               <X size={16} />
@@ -672,6 +902,7 @@ export const AlbumGrid = memo(function AlbumGrid({
                 id={album.coverArt}
                 imageUrl={album.localArtworkUrl}
                 size={featured ? 600 : 400}
+                loadEager={shelf || featured}
               />
             </button>
             <button
@@ -706,14 +937,22 @@ export const TrackTable = memo(function TrackTable({
   onContextMenu,
   onAddToPlaylist,
   onRemoveFromPlaylist,
+  onShare,
   compact = false,
   resultNavigation = false,
+  selecting = false,
+  selectedIndexes,
+  onToggleSelect,
+  onToggleSelectAll,
+  onReorder,
+  reordered,
+  playlistView = false,
 }: {
   songs: Song[];
   client: Navidrome;
   currentId?: string;
   playing: boolean;
-  onPlay: (songs: Song[], index: number) => void;
+  onPlay: (songs: Song[], index: number, restart?: boolean) => void;
   onQueue: (song: Song, next?: boolean) => void;
   onFavorite: (song: Song) => void;
   isFavorite: (song: Song) => boolean;
@@ -721,13 +960,80 @@ export const TrackTable = memo(function TrackTable({
   onContextMenu?: (event: ReactMouseEvent, song: Song) => void;
   onAddToPlaylist?: (song: Song) => void;
   onRemoveFromPlaylist?: (song: Song, index: number) => void;
+  onShare?: (song: Song) => void;
   compact?: boolean;
   resultNavigation?: boolean;
+  selecting?: boolean;
+  selectedIndexes?: Set<number>;
+  onToggleSelect?: (index: number, shiftKey: boolean) => void;
+  onToggleSelectAll?: () => void;
+  /** When provided, rows can be dragged to change playlist order. */
+  onReorder?: (fromIndex: number, toIndex: number) => void;
+  reordered?: boolean;
+  /** Playlist rows are numbered by playlist order, not album track number. */
+  playlistView?: boolean;
 }) {
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragTo, setDragTo] = useState<number | null>(null);
+  const dragState = useRef<{ from: number; to: number } | null>(null);
+  const beginReorder =
+    (index: number) => (event: React.PointerEvent<HTMLButtonElement>) => {
+      if (!onReorder) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragState.current = { from: index, to: index };
+      setDragFrom(index);
+      setDragTo(index);
+    };
+  const updateReorder = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const state = dragState.current;
+    if (!state) return;
+    event.preventDefault();
+    const table = event.currentTarget.closest(".track-table");
+    if (!table) return;
+    let target = state.to;
+    Array.from(table.querySelectorAll<HTMLElement>(".song-row")).forEach(
+      (row, index) => {
+        const rect = row.getBoundingClientRect();
+        if (event.clientY >= rect.top && event.clientY <= rect.bottom)
+          target = index;
+      },
+    );
+    state.to = target;
+    setDragTo(target);
+  };
+  const endReorder = () => {
+    const state = dragState.current;
+    dragState.current = null;
+    setDragFrom(null);
+    setDragTo(null);
+    if (!state || state.from === state.to) return;
+    onReorder?.(state.from, state.to);
+  };
+  const allSelected =
+    selecting && songs.length > 0 && selectedIndexes?.size === songs.length;
   return (
-    <div className={`track-table ${compact ? "album-tracks" : ""}`}>
+    <div
+      className={
+        "track-table" +
+        (compact ? " album-tracks" : "") +
+        (selecting ? " selecting" : "")
+      }
+    >
       {!compact && (
         <div className="track-table-heading">
+          {selecting && (
+            <span className="track-select-cell">
+              <input
+                type="checkbox"
+                aria-label={allSelected ? "Deselect all songs" : "Select all songs"}
+                checked={Boolean(allSelected)}
+                onChange={() => onToggleSelectAll?.()}
+              />
+            </span>
+          )}
           <span>#</span>
           <span>Title</span>
           <span className="track-album-column">Album</span>
@@ -736,23 +1042,65 @@ export const TrackTable = memo(function TrackTable({
           <span />
         </div>
       )}
-      {songs.map((song, index) => (
+      {songs.map((song, index) => {
+        const selected = Boolean(selecting && selectedIndexes?.has(index));
+        return (
         <div
-          className={`song-row ${currentId === song.id ? "current" : ""}`}
+          className={
+            `song-row ${currentId === song.id ? "current" : ""}` +
+            (selected ? " selected" : "") +
+            (reordered ? " reorderable" : "") +
+            (dragFrom === index ? " is-dragging" : "") +
+            (dragTo === index && dragFrom !== null ? " is-drag-over" : "")
+          }
           key={`${song.id}-${index}`}
           onContextMenu={(event) => onContextMenu?.(event, song)}
           onClick={(event) => {
             if (
               event.target instanceof Element &&
-              event.target.closest("button")
+              event.target.closest("button, input")
             )
               return;
-              onPlay(songs, index);
+              if (selecting) onToggleSelect?.(index, event.shiftKey);
+              else onPlay(songs, index);
           }}
         >
+          {reordered && (
+            <button
+              type="button"
+              className="song-drag-handle"
+              aria-label={`Reorder ${song.title}`}
+              onPointerDown={beginReorder(index)}
+              onPointerMove={updateReorder}
+              onPointerUp={endReorder}
+              onPointerCancel={endReorder}
+            >
+              <GripVertical size={14} />
+            </button>
+          )}
+          {selecting && (
+            <span
+              className="track-select-cell"
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleSelect?.(index, event.shiftKey);
+              }}
+            >
+              <input
+                type="checkbox"
+                aria-label={`Select ${song.title}`}
+                checked={selected}
+                readOnly
+                tabIndex={-1}
+              />
+            </span>
+          )}
           <button
             className="song-number"
-            onClick={() => onPlay(songs, index)}
+            onClick={() =>
+              selecting ? onToggleSelect?.(index, false) : onPlay(songs, index)
+            }
+            onDoubleClick={() => !selecting && onPlay(songs, index, true)}
             aria-label={`Play ${song.title}`}
           >
             {currentId === song.id && playing ? (
@@ -763,7 +1111,11 @@ export const TrackTable = memo(function TrackTable({
               </span>
             ) : (
               <>
-                <span>{song.track && compact ? song.track : index + 1}</span>
+                <span>
+                  {song.track && compact && !playlistView
+                    ? song.track
+                    : index + 1}
+                </span>
                 <Play size={13} fill="currentColor" />
               </>
             )}
@@ -771,7 +1123,10 @@ export const TrackTable = memo(function TrackTable({
           <button
             className="song-title"
             data-search-result={resultNavigation ? true : undefined}
-            onClick={() => onPlay(songs, index)}
+            onClick={() =>
+              selecting ? onToggleSelect?.(index, false) : onPlay(songs, index)
+            }
+            onDoubleClick={() => !selecting && onPlay(songs, index, true)}
           >
             {!compact && (
               <Artwork
@@ -792,7 +1147,10 @@ export const TrackTable = memo(function TrackTable({
               <button
                 className="track-album-column"
                 disabled={!song.albumId}
-                onClick={() => song.albumId && onAlbum(song.albumId)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (song.albumId) onAlbum(song.albumId);
+                }}
               >
                 {song.album || "—"}
               </button>
@@ -811,6 +1169,7 @@ export const TrackTable = memo(function TrackTable({
             favorite={isFavorite(song)}
             onAlbum={onAlbum}
             onAddToPlaylist={onAddToPlaylist}
+            onShare={onShare}
             onRemoveFromPlaylist={
               onRemoveFromPlaylist
                 ? () => onRemoveFromPlaylist(song, index)
@@ -818,7 +1177,8 @@ export const TrackTable = memo(function TrackTable({
             }
           />
         </div>
-      ))}
+      );
+      })}
     </div>
   );
 });

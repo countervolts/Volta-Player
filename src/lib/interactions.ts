@@ -79,6 +79,8 @@ export type EngagementEventInput = {
 };
 
 export type EngagementStats = {
+  impressions: number;
+  lastShownAt: number;
   views: number;
   favorites: number;
   unfavorites: number;
@@ -317,6 +319,8 @@ export function clearEngagement(storage: Storage, key: string) {
 }
 
 const emptyStats = (): EngagementStats => ({
+  impressions: 0,
+  lastShownAt: 0,
   views: 0,
   favorites: 0,
   unfavorites: 0,
@@ -449,6 +453,17 @@ export function summarizeEngagement(
   };
 
   for (const event of events) {
+    if (event.kind === "recommendation-impression") {
+      // Exposure never cascades into taste or co-engagement.
+      for (const entity of event.items || (event.entity ? [event.entity] : [])) {
+        if (entity.type !== "album") continue;
+        const stats = statsFor(profile.albums, engageKey(entity.id));
+        if (!stats) continue;
+        stats.impressions += decay(Math.max(0, (now - event.at) / DAY_MS), 14);
+        stats.lastShownAt = Math.max(stats.lastShownAt, event.at);
+      }
+      continue;
+    }
     const base = ENGAGEMENT_WEIGHTS[event.kind] ?? 0;
     const ageDays = Math.max(0, (now - event.at) / DAY_MS);
     const weighted = base * decay(ageDays, event.kind === "search" ? 14 : HALF_LIFE_DAYS);
@@ -594,7 +609,7 @@ export const coengagementSimilarity = (
   let candidateTotal = 0;
   for (const value of reverse?.values() || []) candidateTotal += value;
   const denominator = Math.sqrt(Math.max(1, seedTotal) * Math.max(1, candidateTotal));
-  return clamp(direct / denominator);
+  return clamp(direct / denominator) * direct / (direct + 2);
 };
 
 export const keywordAffinity = (

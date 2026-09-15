@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="description" content="Privacy notes for the Volta Navidrome player." />
+    <script>
+      (() => {
+        try {
+          const theme = localStorage.getItem("volta-info-theme");
+          if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+        } catch {}
+      })();
+    </script>
+    <link rel="stylesheet" href="/info-page.css" />
+    <script src="/info-page.js" defer></script>
+    <title>Privacy · Volta</title>
+  </head>
+  <body>
+    <nav class="site-nav" aria-label="Main navigation">
+      <div class="site-nav-inner">
+        <a class="brand" href="/" aria-label="Volta home">
+          <span class="brand-mark"><img src="/volta-bolt.svg" alt="" /></span>
+          <span>Volta</span>
+        </a>
+        <div class="nav-links">
+          <a href="/help.html">Help</a>
+          <a href="/privacy.html" aria-current="page">Privacy</a>
+          <a class="nav-open" href="/">Open player</a>
+          <span class="appearance">
+            <label for="appearance">Appearance</label>
+            <select id="appearance" data-theme-select aria-label="Appearance">
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </span>
+        </div>
+      </div>
+    </nav>
+
+    <main class="page-shell">
+      <section class="hero">
+        <p class="eyebrow">Volta Privacy</p>
+        <h1>Privacy is built into Volta.</h1>
+        <p class="hero-lede">Your music requests go to the Navidrome server you choose. Local files and listening preferences stay in your browser unless you choose an optional service.</p>
+        <div class="hero-actions">
+          <a href="/">Open the player</a>
+          <a class="text-link" href="/help.html">Get help</a>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="summary-heading">
+        <div class="section-heading">
+          <p class="eyebrow">At a glance</p>
+          <h2 id="summary-heading">The short version.</h2>
+        </div>
+        <div class="privacy-summary">
+          <div class="summary-item">
+            <h3>Direct by default</h3>
+            <p>Library, artwork, lyrics, and playback requests go directly to the Navidrome server you enter.</p>
+          </div>
+          <div class="summary-item">
+            <h3>Local by default</h3>
+            <p>Listening history, recommendation signals, queue state, and preferences are kept in browser storage.</p>
+          </div>
+          <div class="summary-item">
+            <h3>Optional by choice</h3>
+            <p>External lyrics and music-link lookups happen only when you enable or use those features.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section band" aria-labelledby="data-heading">
+        <div class="section-heading">
+          <p class="eyebrow">Data flows</p>
+          <h2 id="data-heading">What leaves your browser.</h2>
+          <p class="section-intro">Volta is a client-side player. These are the destinations involved in normal use and the reason each one receives a request.</p>
+        </div>
+        <div class="data-list">
+          <div class="data-row">
+            <h3>Navidrome</h3>
+            <p>Volta sends authentication, library, artwork, lyrics, and playback requests to the server address you enter. Your server and its hosting provider may keep their own request logs.</p>
+            <span class="data-when">When you connect</span>
+          </div>
+          <div class="data-row">
+            <h3>LRCLIB</h3>
+            <p>If external lyrics are enabled and your server has no lyrics, Volta may send the current song title, artist, album, and duration to look up lyrics.</p>
+            <span class="data-when">Optional</span>
+          </div>
+          <div class="data-row">
+            <h3>MusicBrainz</h3>
+            <p>If you select <strong>Find credits</strong> in a song’s details, Volta sends that song’s title and artist to MusicBrainz. It never looks up credits automatically.</p>
+            <span class="data-when">When you ask</span>
+          </div>
+          <div class="data-row">
+            <h3>Apple Music</h3>
+            <p>When Apple Music is your share destination, Volta sends title, artist, album, and duration to Apple’s public iTunes Search endpoint to find a matching catalog link.</p>
+            <span class="data-when">When you copy a link</span>
+          </div>
+          <div class="data-row">
+            <h3>Spotify</h3>
+            <p>When Spotify is selected, Volta builds a Spotify search URL locally. Opening that URL sends the search to Spotify according to Spotify’s own policies.</p>
+            <span class="data-when">When you open a link</span>
+          </div>
+          <div class="data-row">
+            <h3>Hosting layer</h3>
+            <p>The web host and security layer may process standard web requests, security headers, and delivery logs. Volta does not intentionally send listening telemetry to a Volta server.</p>
+            <span class="data-when">When you load a page</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="stored-heading">
+        <div class="section-heading">
+          <p class="eyebrow">Your browser</p>
+          <h2 id="stored-heading">What stays here.</h2>
+        </div>
+        <div class="answer-list">
+          <div class="answer">
+            <h3>Sign-in information</h3>
+            <p>Your password is not saved. If you enable <strong>Remember this sign-in</strong>, Volta stores a signed Navidrome auth token in this browser profile. Disconnect or forget the account to remove it.</p>
+          </div>
+          <div class="answer">
+            <h3>Listening and recommendations</h3>
+            <p>Optional listening history, recommendation signals, search history, queue state, preferences, and interface settings are stored in your browser. Volta does not intentionally send this profile to a Volta server.</p>
+          </div>
+          <div class="answer">
+            <h3>Local music</h3>
+            <p>When you use This device, Volta reads selected files in your browser. Your local music is not uploaded by Volta. Browser and operating-system permissions still apply.</p>
+          </div>
+          <div class="answer">
+            <h3>Cookies and analytics</h3>
+            <p>The player does not require a Volta account or an analytics profile. Volta does not intentionally send listening telemetry to Volta.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section band" aria-labelledby="control-heading">
+        <div class="section-heading">
+          <p class="eyebrow">Control</p>
+          <h2 id="control-heading">You decide what to share.</h2>
+          <p class="section-intro">Optional services are visible in Settings, and local data can be cleared from the player.</p>
+        </div>
+        <div class="control-grid">
+          <div class="control">
+            <h3>Turn off external lyrics</h3>
+            <p>Open Settings and disable external lyrics. Volta will use only lyrics provided by your Navidrome server.</p>
+            <a class="text-link" href="/?focus=external-lyrics">Open Volta</a>
+          </div>
+          <div class="control">
+            <h3>Clear local data</h3>
+            <p>Listening history and recommendation data can be disabled or cleared from Settings at any time.</p>
+            <a class="text-link" href="/?focus=local-data">Open Volta</a>
+          </div>
+          <div class="control">
+            <h3>Read the source</h3>
+            <p>Volta’s web player is open source. Review how the player handles requests, storage, and optional services.</p>
+            <a class="text-link" href="https://github.com/countervolts/Volta-Player">View source code</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer page-shell">
+      <div class="footer-row">
+        <span>Volta · Privacy notes for the web player.</span>
+        <div class="footer-links">
+          <a href="/help.html">Help</a>
+          <a href="https://github.com/countervolts/Volta-Player">Source code</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

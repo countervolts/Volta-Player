@@ -8,12 +8,16 @@ import {
 import {
   coengagementSimilarity,
   keywordAffinity,
-  normalizedAffinity,
-  normalizedGenreAffinity,
   type EngagementProfile,
   type FeatureVector,
 } from "./interactions";
 import { blendLearnedScore, type RankerModel } from "./learned-ranker";
+import {
+  DEFAULT_RECOMMENDATION_TUNING,
+  normalizeRecommendationTuning,
+  recommendationTuningWeights,
+  type RecommendationTuning,
+} from "./recommendation-tuning";
 
 /**
  * A recommendation is deliberately explainable. The player does not have a
@@ -27,7 +31,13 @@ import { blendLearnedScore, type RankerModel } from "./learned-ranker";
  *  - content metadata (artist, genre, era, track length)
  *  - item-to-item similarity learned from this user's own sessions
  *  - a locally trained logistic model that re-ranks on top of the priors
- *  - bounded exploration plus an MMR-style diversity pass
+ *  - an exposure-gated discovery term and an MMR-style diversity pass
+ *
+ * Relevance and discovery are scored as two separate questions. Relevance asks
+ * "would you like this"; discovery asks "is this something you have not
+ * actually heard yet, that still fits your taste". Risk appetite blends the
+ * two, so raising it reaches genuinely unplayed material instead of only
+ * reshuffling records already in heavy rotation.
  */
 export type RecommendationSignals = {
   artist: number;
@@ -38,7 +48,6 @@ export type RecommendationSignals = {
   favorite: number;
   context: number;
   freshness: number;
-  exploration: number;
   era: number;
   history: number;
   time: number;
@@ -56,9 +65,15 @@ export type RecommendationSignals = {
   replay: number;
   rediscovery: number;
   novelty: number;
+  /** How much of this item the listener has already consumed. */
+  exposure: number;
+  /** The pure-discovery score used when risk appetite is high. */
+  discovery: number;
+  overlooked: number;
+  fatigue: number;
+  tasteFit: number;
   learned: number;
 };
-
 export type AlbumRecommendation = {
   album: AlbumRecord;
   score: number;
@@ -72,6 +87,13 @@ export type AlbumRecommendationInput = {
   candidates: readonly AlbumRecord[];
   /** Extra candidates fetched because of personalization (top artists, etc). */
   discoveryCandidates?: readonly AlbumRecord[];
+  /**
+   * The library-wide album pool. Real discovery needs a candidate set far
+   * larger than the handful of server lists a home page happens to show, so the
+   * app supplies the whole library here and the ranker does genuine retrieval
+   * over it rather than only reordering a pre-selected shelf.
+   */
+  libraryPool?: readonly AlbumRecord[];
   recentlyPlayed?: readonly AlbumRecord[];
   frequentlyPlayed?: readonly AlbumRecord[];
   recentlyAdded?: readonly AlbumRecord[];
@@ -81,6 +103,8 @@ export type AlbumRecommendationInput = {
   listeningProfile?: ListeningProfile;
   engagementProfile?: EngagementProfile;
   rankerModel?: RankerModel;
+  /** User-facing dials that reshape the prior. Defaults reproduce the base ranker. */
+  tuning?: RecommendationTuning;
   now?: Date;
   limit?: number;
 };
@@ -102,6 +126,8 @@ type AlbumProfile = {
 type ScoredAlbum = AlbumRecommendation & {
   artistKey: string;
   genreKeys: string[];
+  /** 0 = the listener has never touched this, 1 = deep in heavy rotation. */
+  exposure: number;
 };
 
 type TasteSeeds = {
@@ -113,6 +139,16 @@ type TasteSeeds = {
 
 const normalize = (value?: string) =>
   value?.trim().toLocaleLowerCase().replace(/\s+/g, " ") || "";
+
+/**
+ * Exposure at or above this means the listener has genuinely worn the album
+ * out, as opposed to merely encountered it. Used to gate the shelf so heavy
+ * rotation cannot occupy it at high risk appetite.
+ */
+const ROTATION_EXPOSURE = 0.6;
+
+/** Score demotion applied to worn-out albums, scaled by risk appetite. */
+const ROTATION_PENALTY = 0.55;
 
 const artistKey = (album: AlbumRecord) =>
   normalize(album.artistId || album.artist);
@@ -142,19 +178,23 @@ const positionalWeight = (index: number, length: number, base: number) => {
   return base * (0.42 + 0.58 * Math.exp(-index / Math.max(1, length * 0.42)));
 };
 
-const normalizedMapValue = (map: Map<string, number>, key: string) => {
-  if (!key || !map.size) return 0;
-  let maximum = 0;
-  for (const value of map.values()) maximum = Math.max(maximum, value);
-  return maximum > 0 ? clamp((map.get(key) || 0) / maximum) : 0;
-};
-
-const normalizedGenreValue = (
-  map: Map<string, number>,
-  keys: readonly string[],
-) => {
-  if (!keys.length || !map.size) return 0;
-  return Math.max(...keys.map((key) => normalizedMapValue(map, key)), 0);
+/** Cache normalization per ranking call; a full library must not rescan
+ * every affinity map for every candidate. No cross-user mutable cache. */
+const affinityLookup = () => {
+  const maxima = new Map<Map<string, number>, number>();
+  const value = (map: Map<string, number> | undefined, key: string) => {
+    if (!map || !key) return 0;
+    let maximum = maxima.get(map);
+    if (maximum === undefined) {
+      maximum = 0;
+      for (const amount of map.values()) maximum = Math.max(maximum, amount);
+      maxima.set(map, maximum);
+    }
+    return maximum > 0 ? clamp((map.get(key) || 0) / maximum) : 0;
+  };
+  const genres = (map: Map<string, number> | undefined, keys: readonly string[]) =>
+    Math.max(0, ...keys.map((key) => value(map, key)));
+  return { value, genres };
 };
 
 const statCompletion = (stats?: ListeningStats) =>
@@ -197,7 +237,7 @@ const contextAffinity = (
     contextualVolume * 0.58 +
       statCompletion(stats) * 0.27 +
       statAffinity(stats, now) * 0.15,
-  );
+  ) * stats.starts / (stats.starts + 3);
 };
 
 const transitionAffinity = (
@@ -246,7 +286,7 @@ const cosineSimilarity = (
   let candidateTotal = 0;
   for (const value of map.get(candidate)?.values() || []) candidateTotal += value;
   const denominator = Math.sqrt(Math.max(1, seedTotal) * Math.max(1, candidateTotal));
-  return clamp(direct / denominator);
+  return clamp(direct / denominator) * direct / (direct + 2);
 };
 
 const bestCosine = (
@@ -323,13 +363,16 @@ const buildProfile = (input: AlbumRecommendationInput): AlbumProfile => {
   addList(input.recentlyPlayed, 1.05, "recent");
   addList(input.frequentlyPlayed, 1.1, "taste");
   addList(input.frequentlyPlayed, 1.0, "frequent");
-  addList(input.recentlyAdded, 0.16, "taste");
+  // Library additions are availability, not evidence of personal taste.
   addList(input.recentlyAdded, 1.0, "freshness");
 
+  const metadata = new Map(mergeAlbums([input.candidates, input.discoveryCandidates || [], input.libraryPool || []]).map((album) => [album.id, album]));
   for (const id of profile.favoriteAlbumIds) {
     // A favorite album may not be present in the current candidate response,
     // but its ID should still be available as a strong future signal.
-    add(profile.albums, id, 1.45);
+    const album = metadata.get(id);
+    if (album) addAlbumSignal(profile, album, 1.45, "taste");
+    else add(profile.albums, id, 1.45);
   }
 
   // A current/upcoming session is useful short-term context, but it is kept
@@ -412,7 +455,9 @@ const mergeAlbums = (groups: readonly (readonly AlbumRecord[])[]) => {
       // Later responses often contain richer records (for example a favorite
       // result may carry a starred date). Merge without losing cover art or
       // metadata from the earlier candidate source.
-      albums.set(id, existing ? { ...existing, ...album } : album);
+      albums.set(id, existing ? { ...existing, ...Object.fromEntries(
+        Object.entries(album).filter(([, value]) => value !== undefined && value !== null),
+      ) } as AlbumRecord : album);
     }
   }
   return [...albums.values()];
@@ -421,7 +466,8 @@ const mergeAlbums = (groups: readonly (readonly AlbumRecord[])[]) => {
 const genreOverlap = (left: readonly string[], right: readonly string[]) => {
   if (!left.length || !right.length) return 0;
   const other = new Set(right);
-  return left.some((genre) => other.has(genre)) ? 1 : 0;
+  const common = left.filter((genre) => other.has(genre)).length;
+  return common / (new Set([...left, ...right]).size || 1);
 };
 
 const similarity = (left: ScoredAlbum, right: ScoredAlbum) => {
@@ -435,10 +481,32 @@ const formatGenre = (album: AlbumRecord) => {
   return genre || "this sound";
 };
 
-const reasonFor = (item: ScoredAlbum, seeds: TasteSeeds) => {
+const reasonFor = (
+  item: ScoredAlbum,
+  seeds: TasteSeeds,
+  adventurousness = 0,
+) => {
   const { album, signals } = item;
   const artist = album.artist?.trim() || "this artist";
+  const genre = formatGenre(album);
+  // Explanations lead with what is actually driving the pick. Unplayed material
+  // is described as such rather than borrowing the language of familiarity,
+  // which is what previously made a discovery shelf read like a repeat of
+  // records the listener already knew.
   if (signals.favorite >= 1) return "Because you saved this album";
+  if (signals.overlooked > 0.7 && signals.tasteFit >= 0.15)
+    return `Overlooked ${genre}, close to your taste`;
+  if (signals.exposure === 0) {
+    if (signals.cooccurrence >= 0.3 || signals.coengagement >= 0.3)
+      return "Close to what you play, with no recorded listens";
+    if (signals.context >= 0.5) return `Unplayed ${genre}, close to what you have on now`;
+    if (adventurousness >= 0.6) return `A lesser-played ${genre} discovery`;
+    return "In your collection, with no recorded listens";
+  }
+  if (signals.exposure <= 0.25 && adventurousness >= 0.4) {
+    if (signals.history > 0.4) return `You liked ${artist}, but barely played this`;
+    return `A ${genre} record you have only brushed past`;
+  }
   if (signals.engagement >= 0.6 && signals.engagementArtist >= 0.5)
     return `You keep coming back to ${artist}`;
   if (signals.engagement >= 0.55) return "From an album you engaged with";
@@ -452,10 +520,11 @@ const reasonFor = (item: ScoredAlbum, seeds: TasteSeeds) => {
   if (signals.replay >= 0.6) return `A ${artist} record you replay`;
   if (signals.frequent >= 0.58) return "From your heavy rotation";
   if (signals.recent >= 0.58) return "A familiar record you may want back";
-  if (signals.genre >= 0.58) return `Because you play ${formatGenre(album)}`;
+  if (signals.genre >= 0.58) return `Because you play ${genre}`;
   if (signals.freshness >= 0.62) return "A new arrival in your collection";
+  if (signals.exposure >= 0.6) return `A ${artist} album you have played a lot`;
   if (signals.novelty >= 0.6 && seeds.genres.length)
-    return `A different corner of ${formatGenre(album)}`;
+    return `A different corner of ${genre}`;
   return "A fresh turn from your collection";
 };
 
@@ -465,8 +534,8 @@ const reasonFor = (item: ScoredAlbum, seeds: TasteSeeds) => {
  * This is intentionally a small hybrid recommender rather than a pretend ML
  * model. It combines server-ranked implicit feedback, explicit favorites,
  * content metadata, short-term queue context, first-party engagement, learned
- * item-to-item similarity, a locally trained re-ranker, deterministic
- * exploration, and a maximal-marginal-relevance-style diversity pass. The
+ * item-to-item similarity, a locally trained re-ranker, exposure-gated
+ * discovery, and a maximal-marginal-relevance-style diversity pass. The
  * function is pure so it can be evaluated cheaply with useMemo and tested
  * independently of React.
  */
@@ -474,8 +543,15 @@ export function rankAlbumRecommendations(
   input: AlbumRecommendationInput,
 ): AlbumRecommendation[] {
   const limit = Math.max(0, Math.trunc(input.limit ?? 8));
-  if (!limit || !input.candidates.length) return [];
+  if (!limit) return [];
   const now = input.now || new Date();
+  const tuning = normalizeRecommendationTuning(
+    input.tuning || DEFAULT_RECOMMENDATION_TUNING,
+  );
+  const weights = recommendationTuningWeights(tuning);
+  const { value: normalizedMapValue, genres: normalizedGenreValue } = affinityLookup();
+  const normalizedAffinity = normalizedMapValue;
+  const normalizedGenreAffinity = normalizedGenreValue;
   const profile = buildProfile(input);
   const seeds = buildSeeds(input, profile, now);
   const engagement = input.engagementProfile;
@@ -489,19 +565,29 @@ export function rankAlbumRecommendations(
     profile.yearWeight > 0 ? profile.yearTotal / profile.yearWeight : null;
   const seedAlbums = seeds.albums.slice(0, 8);
   const seedArtists = seeds.artists.slice(0, 8);
+  // Risk appetite drives the relevance/discovery tradeoff. Hoisted here because
+  // both the per-candidate discovery score and the final blend need it.
+  const adventure = tuning.adventurousness;
+  // The curve is deliberately superlinear: low settings barely loosen the
+  // shelf, while the top of the range commits fully to discovery. A straight
+  // line made every mid preset behave like Explorer and left the dials feeling
+  // like they did nothing.
+  const discoveryWeight = Math.pow(adventure, 1.5);
 
   const scored: ScoredAlbum[] = mergeAlbums([
     input.candidates,
     input.discoveryCandidates || [],
+    // Retrieval: the library pool widens the candidate set from "whatever the
+    // server put on the home page" to the whole collection, which is what makes
+    // real discovery possible. Scoring is cheap and pure, so we can afford it.
+    input.libraryPool || [],
   ])
-    // An explicit artist mute is an instruction, not a hint. Muted artists only
-    // survive when there is literally nothing else to show (handled below).
-    .filter((album) => !excluded.has(albumKey(album)))
+    // Explicit mutes remain hard exclusions, including on small libraries.
+    .filter((album) => !excluded.has(albumKey(album)) && !engagement?.mutes.has(`artist:${artistKey(album)}`))
     .map((album) => {
       const id = albumKey(album);
       const artist = artistKey(album);
       const genres = genreKeys(album.genre);
-      const muted = Boolean(engagement?.mutes.has(`artist:${artist}`));
       const artistAffinity = normalizedMapValue(profile.artists, artist);
       const genreAffinity = normalizedGenreValue(profile.genres, genres);
       const albumAffinity = normalizedMapValue(profile.albums, id);
@@ -540,10 +626,10 @@ export function rankAlbumRecommendations(
             )
           : 0;
       const skipPenalty = albumStats
-        ? clamp(albumStats.earlySkips / Math.max(1, albumStats.starts))
+        ? clamp(albumStats.earlySkips / (albumStats.starts + 3))
         : 0;
       const artistSkipPenalty = artistStats
-        ? clamp(artistStats.earlySkips / Math.max(1, artistStats.starts))
+        ? clamp(artistStats.earlySkips / (artistStats.starts + 8))
         : 0;
 
       const era =
@@ -616,47 +702,101 @@ export function rankAlbumRecommendations(
           engagementScore * 0.25,
       );
       const novelty = clamp(1 - familiarity);
-      const exploration = clamp(novelty * 0.55 + stableRotation(id, now) * 0.45);
       const recentPenalty = recent * 0.17;
 
+      // ---- Exposure: how much of this the listener has already consumed.
+      // Tracked separately from taste, because "you already play this to death"
+      // and "you would like this" are different questions. Without this, raised
+      // risk appetite could only ever reshuffle records already in rotation.
+      //
+      // Neither artist familiarity nor genre taste proves album consumption.
+      // Album-specific consumption only. Saves, views, and other albums by
+      // this artist are not listens. One album pass is not heavy rotation.
+      const albumSeconds = album.duration && album.duration > 0 ? album.duration : 2400;
+      const albumTracks = album.songCount && album.songCount > 0 ? album.songCount : 10;
+      const localPasses = (albumStats?.listenedSeconds || 0) / albumSeconds;
+      const serverPlays = Number.isFinite(album.playCount) ? Math.max(0, album.playCount!) : 0;
+      const exposure = clamp(Math.max(
+        1 - Math.exp(-localPasses / 2),
+        // Starts are weak evidence when playback never progresses.
+        Math.min(0.25, (albumStats?.starts || 0) / (albumTracks * 8)),
+        1 - Math.exp(-serverPlays / 4),
+        recent > 0 ? 0.12 : 0,
+        frequent > 0 ? 0.35 + frequent * 0.35 : 0,
+      ));
+      const seen = engagement?.albums.get(normalize(id));
+      const impressions = seen?.impressions || 0;
+      const views = seen?.views || 0;
+      const overlooked = (1 - exposure) / Math.sqrt(1 + views + impressions);
+      const shownAgeDays = seen?.lastShownAt
+        ? Math.max(0, (now.getTime() - seen.lastShownAt) / 86_400_000) : Infinity;
+      // Temporary shelf fatigue, not a dislike. It recovers with time and is
+      // discounted when the listener actively chose this album afterward.
+      const actedSinceShown = Boolean(seen && seen.lastAt > seen.lastShownAt);
+      const fatigue = (1 - Math.exp(-impressions / 3)) *
+        Math.exp(-shownAgeDays / 3) * (actedSinceShown ? 0.25 : 1);
+      // A softened gate: anything not worn out stays discovery-eligible, and
+      // proven affinity breaks ties. A hard multiplier here meant a lightly
+      // played album you clearly liked lost to a completely untouched one.
+      const unexposed = Math.sqrt(clamp(1 - exposure));
+
+      // ---- Discovery: fits your taste, but you have not actually heard it.
+      // The `unexposed` gate is what makes high risk appetite reach genuinely
+      // new material instead of reshuffling heavy rotation.
+      const tasteFit = clamp(
+        artistAffinity * 0.26 +
+          genreAffinity * 0.24 +
+          historicalTaste * 0.18 +
+          engagementScore * 0.16 +
+          cooccurrence * 0.2 +
+          coengagement * 0.16 +
+          artistCooccurrence * 0.14 +
+          era * 0.06 +
+          duration * 0.05 +
+          search * 0.08,
+      );
+      // Even Explorer retains relevance. Uncertainty earns a bounded bonus,
+      // rather than letting daily random noise dominate musical fit.
+      const discovery = unexposed * (
+        tasteFit * (0.85 - adventure * 0.2) +
+        overlooked * 0.2 +
+        novelty * adventure * 0.08 +
+        stableRotation(id, now) * (0.025 + adventure * 0.055)
+      );
+
       const priorScore =
-        artistAffinity * 0.24 +
-        genreAffinity * 0.19 +
-        albumAffinity * 0.1 +
-        frequent * 0.1 +
-        recent * 0.06 +
-        favorite * 0.12 +
+        artistAffinity * 0.24 * weights.artist +
+        genreAffinity * 0.19 * weights.genre +
+        albumAffinity * 0.1 * weights.album +
+        frequent * 0.1 * weights.frequent +
+        recent * 0.06 * weights.recent +
+        favorite * 0.12 * weights.favorite +
         context * 0.11 +
-        freshness * 0.05 +
-        era * 0.03 +
-        exploration * 0.09 +
-        historicalTaste * 0.17 +
+        freshness * 0.05 * weights.freshness +
+        era * 0.03 * weights.era +
+        historicalTaste * 0.17 * weights.history +
         time * 0.1 +
         transition * 0.08 +
         duration * 0.03 +
-        engagementScore * 0.2 +
-        engagementArtist * 0.12 +
-        engagementGenre * 0.09 +
+        engagementScore * 0.2 * weights.engagement +
+        engagementArtist * 0.12 * weights.engagement +
+        engagementGenre * 0.09 * weights.engagement +
         search * 0.07 +
-        cooccurrence * 0.14 +
-        coengagement * 0.12 +
-        artistCooccurrence * 0.08 +
-        loyalty * 0.06 +
-        replay * 0.05 +
-        rediscovery * 0.04 -
-        recentPenalty -
-        skipPenalty * 0.16 -
-        aversion * 0.3;
+        cooccurrence * 0.14 * weights.cooccurrence +
+        coengagement * 0.12 * weights.cooccurrence +
+        artistCooccurrence * 0.08 * weights.cooccurrence +
+        loyalty * 0.06 * weights.loyalty +
+        replay * 0.05 * weights.replay +
+        rediscovery * 0.04 * weights.rediscovery -
+        recentPenalty * weights.recentPenalty -
+        skipPenalty * 0.16 * weights.skipPenalty -
+        aversion * 0.3 * weights.aversion;
 
       // A shuffle-heavy listener wants breadth; an album listener wants
-      // continuity. Nudge exploration in the direction they actually behave.
+      // continuity. Nudge discovery in the direction they actually behave.
       const discoveryBias =
         seeds.shuffleBias * 0.05 * (0.4 + novelty) -
         (1 - seeds.shuffleBias) * 0.02 * novelty;
-      // A muted artist is still shown if we have no other choice, but at a
-      // severe disadvantage so it only appears as a last resort.
-      const mutePenalty = muted ? 0.6 : 0;
-
       const signals: RecommendationSignals = {
         artist: artistAffinity,
         genre: genreAffinity,
@@ -666,7 +806,6 @@ export function rankAlbumRecommendations(
         favorite,
         context,
         freshness,
-        exploration,
         era,
         history: historicalTaste,
         time,
@@ -684,43 +823,90 @@ export function rankAlbumRecommendations(
         replay,
         rediscovery,
         novelty,
+        exposure,
+        discovery,
+        overlooked,
+        fatigue,
+        tasteFit,
         learned: 0,
       };
       const features: FeatureVector = signals;
-      const base = priorScore + discoveryBias - mutePenalty;
-      const learned = blendLearnedScore(base, input.rankerModel, features) - base;
+      const relevance = priorScore + discoveryBias;
+      // Worn-out records are demoted rather than removed. A penalty keeps the
+      // shelf full on small libraries while still making heavy rotation lose
+      // to genuinely unplayed material whenever there is any to show.
+      const rotationPenalty =
+        exposure >= ROTATION_EXPOSURE
+          ? discoveryWeight * ROTATION_PENALTY
+          : 0;
+      const base =
+        relevance * (1 - discoveryWeight) +
+        discovery * discoveryWeight -
+        rotationPenalty + overlooked * (0.04 + adventure * 0.12) -
+        fatigue * (0.12 + adventure * 0.18) -
+        // Negative feedback survives the discovery blend, even at risk=100%.
+        aversion * discoveryWeight * 0.35 * weights.aversion;
+      const learned =
+        (blendLearnedScore(base, input.rankerModel, features) - base) *
+        weights.learned;
       signals.learned = learned;
       const item: ScoredAlbum = {
         album,
         score: base + learned,
+        exposure,
         reason: "",
         signals,
         features,
         artistKey: artist,
         genreKeys: genres,
       };
-      item.reason = reasonFor(item, seeds);
+      item.reason = reasonFor(item, seeds, tuning.adventurousness);
       return item;
     });
 
   if (!scored.length) return [];
 
   const remaining = [...scored];
+  // Reserve discovery opportunities at every preset, provided taste evidence
+  // exists. Never force disliked or unrelated albums merely to meet a quota.
+  const discoveryTarget = Math.round(Math.min(limit, scored.length) * adventure * 0.75);
+  let discoveries = 0;
+  const genreCounts = new Map<string, number>();
+  const genreTaste = new Map(profile.genres);
+  listeningProfile?.genres.forEach((stats, genre) => add(genreTaste, genre, statAffinity(stats, now)));
+  engagement?.genreAffinity.forEach((value, genre) => add(genreTaste, genre, value));
+  const genreTotal = [...genreTaste.values()].reduce((total, value) => total + value, 0);
+  const discoveryEligible = (item: ScoredAlbum) => item.exposure < 0.3 &&
+    item.signals.aversion < 0.35 && (item.signals.tasteFit >= 0.08 || !genreTotal);
+
   const selected: ScoredAlbum[] = [];
   const artistCounts = new Map<string, number>();
   while (remaining.length && selected.length < limit) {
+    const needsDiscovery = discoveries < discoveryTarget &&
+      limit - selected.length <= discoveryTarget - discoveries && remaining.some(discoveryEligible);
     let bestIndex = 0;
     let bestValue = Number.NEGATIVE_INFINITY;
     for (let index = 0; index < remaining.length; index++) {
       const candidate = remaining[index];
+      if (needsDiscovery && !discoveryEligible(candidate)) continue;
       const redundancy = selected.length
         ? Math.max(...selected.map((item) => similarity(candidate, item)))
         : 0;
-      const artistCount = artistCounts.get(candidate.artistKey) || 0;
-      // This is a modest diversity tax, not a hard artist ban. It preserves a
-      // second excellent album when the library is small while preferring a
-      // different artist when relevance is close.
-      const value = candidate.score - redundancy * 0.14 - artistCount * 0.11;
+      const artistCount = candidate.artistKey ? artistCounts.get(candidate.artistKey) || 0 : 0;
+      // Give underrepresented taste genres some space without demanding an
+      // exact histogram or treating all music as one average release year.
+      const coverage = genreTotal > 0 ? candidate.genreKeys.reduce((sum, genre) => {
+        const target = (genreTaste.get(genre) || 0) / genreTotal;
+        const actual = (genreCounts.get(genre) || 0) / Math.max(1, selected.length);
+        return sum + Math.max(0, target - actual);
+      }, 0) : 0;
+      // Soft taxes, not hard bans: a second album by the same artist is allowed
+      // when it genuinely outranks the alternatives, and every candidate stays
+      // eligible so the shelf always fills when the library is small.
+      const value =
+        candidate.score + coverage * 0.16 * weights.diversity -
+        redundancy * 0.14 * weights.diversity -
+        artistCount * 0.11 * weights.diversity;
       if (
         value > bestValue ||
         (value === bestValue &&
@@ -732,12 +918,45 @@ export function rankAlbumRecommendations(
     }
     const [best] = remaining.splice(bestIndex, 1);
     selected.push(best);
+    if (discoveryEligible(best)) discoveries += 1;
+    best.genreKeys.forEach((genre) => genreCounts.set(genre, (genreCounts.get(genre) || 0) + 1 / best.genreKeys.length));
     artistCounts.set(best.artistKey, (artistCounts.get(best.artistKey) || 0) + 1);
   }
 
   return selected.map(
     ({ artistKey: _artistKey, genreKeys: _genreKeys, ...item }) => item,
   );
+}
+
+/**
+ * Turn a list of songs into one-track album candidates.
+ *
+ * The Settings preview mixes these with the album pool so the live list covers
+ * songs as well as albums. Deduped by album ID, so a song whose album is
+ * already a candidate simply merges into it.
+ */
+export function songAlbumCandidates(songs: readonly Song[]): AlbumRecord[] {
+  const seen = new Set<string>();
+  const candidates: AlbumRecord[] = [];
+  for (const song of songs) {
+    const id = (song.albumId || song.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    candidates.push({
+      id,
+      name: song.album || song.title,
+      artist: song.artist || song.albumArtist,
+      artistId: song.artistId,
+      coverArt: song.coverArt,
+      year: song.year,
+      genre: song.genre,
+      songCount: 1,
+      duration: song.duration,
+      source: song.source,
+      localArtworkUrl: song.localArtworkUrl,
+    });
+  }
+  return candidates;
 }
 
 /** Merge server response groups while preserving the first-seen order. */

@@ -19,6 +19,7 @@ export type ShortcutId =
   | "goAlbums"
   | "goArtists"
   | "goSongs"
+  | "goFolders"
   | "goFavorites"
   | "goPlaylists"
   | "goBack"
@@ -143,8 +144,9 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   {
     id: "toggleSidebar",
     category: "Search and navigation",
-    label: "Toggle navigation sidebar",
-    description: "Show or hide the library navigation.",
+    label: "Collapse or expand navigation",
+    description:
+      "Shrink the sidebar to an icon rail, or restore it. On a narrow window it opens or closes the navigation drawer.",
     defaultBinding: { code: "KeyB", mod: true },
   },
   {
@@ -190,18 +192,25 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     defaultBinding: { code: "Digit6", mod: true },
   },
   {
+    id: "goFolders",
+    category: "Search and navigation",
+    label: "Go to Folders",
+    description: "Browse the library by folder.",
+    defaultBinding: { code: "Digit7", mod: true },
+  },
+  {
     id: "goFavorites",
     category: "Search and navigation",
     label: "Go to Favorite Songs",
     description: "Open your favorite tracks.",
-    defaultBinding: { code: "Digit7", mod: true },
+    defaultBinding: { code: "Digit8", mod: true },
   },
   {
     id: "goPlaylists",
     category: "Search and navigation",
     label: "Go to Playlists",
     description: "Open your playlists.",
-    defaultBinding: { code: "Digit8", mod: true },
+    defaultBinding: { code: "Digit9", mod: true },
   },
   {
     id: "goBack",

@@ -1,4 +1,12 @@
 import md5 from "md5";
+import {
+  lyricsFromStructured,
+  parseLrc,
+  parsePlainLyrics,
+  type Lyrics,
+  type StructuredLyrics,
+} from "./lyrics";
+import type { TrackAnalysis } from "./audio-analysis";
 
 export type Song = {
   id: string;
@@ -7,12 +15,15 @@ export type Song = {
   artist?: string;
   artistId?: string;
   albumArtist?: string;
+  composer?: string;
   album?: string;
   albumId?: string;
   coverArt?: string;
   duration?: number;
   track?: number;
   discNumber?: number;
+  /** Server play total, when the OpenSubsonic implementation exposes it. */
+  playCount?: number;
   bitRate?: number;
   codec?: string;
   bitDepth?: number;
@@ -24,6 +35,33 @@ export type Song = {
   year?: number;
   genre?: string;
   size?: number;
+  /**
+   * Scanned tempo in beats per minute, when the server exposes it. Navidrome
+   * surfaces this through OpenSubsonic as `bpm`. AutoMix uses it to beat-match.
+   */
+  bpm?: number;
+  /**
+   * Scanned musical key, e.g. `Am`, `F#m`, `C major`, or a Camelot code like
+   * `8A`. AutoMix converts it to a Camelot wheel position.
+   */
+  musicalKey?: string;
+  /**
+   * Tempo/key/energy measured from the audio by AutoMix. Populated lazily for
+   * tracks the server has not scanned; see `automix-analyzer.ts`.
+   */
+  analysis?: TrackAnalysis;
+  /** ReplayGain values in dB, when the server exposes scanned tags. */
+  replayGain?: {
+    trackGain?: number;
+    albumGain?: number;
+    trackPeak?: number;
+    albumPeak?: number;
+  };
+  /**
+   * Server-side file path, e.g. `/Artist/Album/01 - Song.mp3`. Navidrome
+   * exposes this on every song and derives its simulated folder tree from it.
+   */
+  path?: string;
   localPath?: string;
   localUrl?: string;
   localArtworkUrl?: string;
@@ -32,6 +70,8 @@ export type Song = {
 
 export type AlbumRecord = {
   id: string;
+  /** Per-user server playback count, when supplied. Not global popularity. */
+  playCount?: number;
   name?: string;
   title?: string;
   artist?: string;
@@ -84,13 +124,9 @@ export type Credentials = {
   auth?: AuthMaterial;
 };
 export type AuthMaterial = { salt: string; token: string };
-/** start is in seconds, with the server's lyric offset already applied. */
-export type LyricsLine = { text: string; start?: number };
-export type Lyrics = {
-  lines: LyricsLine[];
-  synced: boolean;
-  language?: string;
-};
+// The parsers live in their own module so they stay testable in isolation.
+export { parseLyricsText } from "./lyrics";
+export type { Lyrics, LyricsLine, LyricsWord } from "./lyrics";
 export type LibraryResults = {
   song: Song[];
   album: AlbumRecord[];
@@ -111,14 +147,11 @@ type Envelope<T> = {
     error?: { code?: number; message?: string };
   };
 };
-type StructuredLyrics = {
-  lang?: string;
-  offset?: number;
-  synced: boolean;
-  line?: { value: string; start?: number }[];
-};
-
 type LrclibLyricsRecord = {
+  trackName?: string | null;
+  artistName?: string | null;
+  albumName?: string | null;
+  duration?: number | null;
   plainLyrics?: string | null;
   syncedLyrics?: string | null;
   instrumental?: boolean;
@@ -126,42 +159,54 @@ type LrclibLyricsRecord = {
 
 const REQUEST_TIMEOUT = 15_000;
 const LRCLIB_ENDPOINT = "https://lrclib.net/api/get";
+const LRCLIB_SEARCH_ENDPOINT = "https://lrclib.net/api/search";
 const lrclibCache = new Map<string, Lyrics | null>();
 
-function parseLrc(value: string): Lyrics | null {
-  const lines: LyricsLine[] = [];
-  for (const rawLine of value.split(/\r?\n/)) {
-    const timestamps = [
-      ...rawLine.matchAll(/\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g),
-    ];
-    if (!timestamps.length) continue;
-    const text = rawLine.replace(/\[[^\]]+\]/g, "").trim();
-    for (const timestamp of timestamps) {
-      const fraction = (timestamp[3] || "").padEnd(3, "0").slice(0, 3);
-      lines.push({
-        text,
-        start:
-          Number(timestamp[1]) * 60 +
-          Number(timestamp[2]) +
-          (fraction ? Number(fraction) / 1000 : 0),
-      });
-    }
-  }
-  if (!lines.length) return null;
-  lines.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
-  return { lines, synced: true };
-}
+const normalizeLrclibValue = (value: string) =>
+  value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 
-function parsePlainLyrics(value: string): Lyrics | null {
-  if (!value.trim()) return null;
-  return {
-    synced: false,
-    lines: value.split(/\r?\n/).map((text) => ({ text })),
-  };
-}
+const lrclibArtistName = (value: string) =>
+  value
+    .split(/[;\u0000•]/, 1)[0]
+    .split(/\s+(?:feat\.?|ft\.?|featuring|with)\s+/i, 1)[0]
+    .trim();
 
-export function parseLyricsText(value: string): Lyrics | null {
-  return parseLrc(value) || parsePlainLyrics(value);
+const lrclibValueMatches = (left: string, right: string) => {
+  const a = normalizeLrclibValue(left);
+  const b = normalizeLrclibValue(right);
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+};
+
+export function pickSyncedLrclibResult(
+  records: unknown,
+  song: Song,
+): Lyrics | null {
+  if (!Array.isArray(records)) return null;
+  const title = normalizeLrclibValue(song.title);
+  const artist = normalizeLrclibValue(
+    lrclibArtistName(song.albumArtist || song.artist || ""),
+  );
+  const duration = song.duration || 0;
+  const candidates = records
+    .filter((candidate): candidate is LrclibLyricsRecord => {
+      if (!candidate || typeof candidate !== "object") return false;
+      const item = candidate as LrclibLyricsRecord;
+      return (
+        lrclibValueMatches(item.trackName || "", title) &&
+        lrclibValueMatches(item.artistName || "", artist) &&
+        Boolean(item.syncedLyrics && parseLrc(item.syncedLyrics))
+      );
+    })
+    .sort((left, right) => {
+      const distance = (item: LrclibLyricsRecord) =>
+        typeof item.duration === "number" && duration > 0
+          ? Math.abs(item.duration - duration)
+          : Number.POSITIVE_INFINITY;
+      return distance(left) - distance(right);
+    });
+  return candidates[0]?.syncedLyrics
+    ? parseLrc(candidates[0].syncedLyrics)
+    : null;
 }
 
 class NavidromeError extends Error {
@@ -221,6 +266,45 @@ export function isConnectionFailure(error: unknown): boolean {
     (error instanceof DOMException &&
       ["AbortError", "NetworkError", "TimeoutError"].includes(error.name))
   );
+}
+
+export type ConnectionIssue = "cors" | "mixed-content" | "network";
+
+/**
+ * A failed cross-origin request surfaces as an opaque `TypeError`, which is
+ * indistinguishable from an unreachable host. A follow-up `no-cors` probe
+ * resolves with an opaque response whenever the origin actually answered, so
+ * we can tell "server is up but blocking us with CORS" apart from "we never
+ * reached the server" and give the user the right fix.
+ */
+export async function diagnoseConnection(
+  rawServer: string,
+  signal?: AbortSignal,
+): Promise<ConnectionIssue> {
+  const base = rawServer.trim().replace(/\/+$/, "");
+  try {
+    const target = new URL(base);
+    if (
+      typeof location !== "undefined" &&
+      location.protocol === "https:" &&
+      target.protocol === "http:"
+    )
+      return "mixed-content";
+  } catch {
+    /* The address is validated elsewhere; fall through to the probe. */
+  }
+  try {
+    await fetch(`${base}/rest/ping.view`, {
+      mode: "no-cors",
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      signal,
+    });
+    return "cors";
+  } catch {
+    return "network";
+  }
 }
 
 const libraryResults = (value?: Partial<LibraryResults>): LibraryResults => ({
@@ -420,6 +504,58 @@ export class Navidrome {
     return { ...data.album, song: data.album.song ?? [] };
   }
 
+  /**
+   * Every album in the library, fetched a page at a time.
+   *
+   * A single `getAlbumList2` call has to be given a size, and OpenSubsonic
+   * servers commonly cap that around 500. Anything that needs the whole
+   * collection (retrieval for recommendations, Infinite Play) has to paginate,
+   * otherwise it silently treats the first page as the entire library and can
+   * never surface albums past it.
+   */
+  async allAlbums(
+    options: {
+      type?: string;
+      pageSize?: number;
+      max?: number;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<AlbumRecord[]> {
+    const type = options.type || "alphabeticalByName";
+    const pageSize = Math.max(1, Math.trunc(options.pageSize ?? 500));
+    const max = options.max && options.max > 0 ? Math.trunc(options.max) : Infinity;
+    const albums = new Map<string, AlbumRecord>();
+    for (let offset = 0; albums.size < max; offset += pageSize) {
+      const page = await this.albums(type, pageSize, offset, options.signal);
+      if (!page.length) break;
+      let added = 0;
+      for (const album of page) {
+        const id = album.id?.trim();
+        // Paged endpoints can repeat rows near a boundary; keying by ID both
+        // dedupes and gives a reliable termination signal.
+        if (!id || albums.has(id)) continue;
+        albums.set(id, album);
+        added += 1;
+      }
+      // A full page that added nothing new means the server is ignoring the
+      // offset. Stop rather than looping forever.
+      if (!added) break;
+      if (page.length < pageSize) break;
+    }
+    return [...albums.values()].slice(0, max);
+  }
+
+  /** Full metadata for one track, used to hydrate locally recorded history. */
+  async song(id: string, signal?: AbortSignal): Promise<Song> {
+    const data = await this.request<{ song?: Song }>(
+      "getSong",
+      { id },
+      signal,
+    );
+    if (!data.song) throw new Error("This song is no longer available.");
+    return data.song;
+  }
+
   async artists(signal?: AbortSignal): Promise<Artist[]> {
     const data = await this.request<{
       artists?: { index?: { artist?: Artist[] }[] };
@@ -476,6 +612,42 @@ export class Navidrome {
     return data.searchResult3?.song ?? [];
   }
 
+  /**
+   * Every song in the library, paginated.
+   *
+   * Servers clamp `songCount` (Navidrome caps it near 100), so the page size is
+   * only a request. Advancing by what the server actually returned — and
+   * treating a short page as the end — is what keeps a large library from being
+   * silently truncated to its first page.
+   */
+  async allSongs(
+    options: { pageSize?: number; max?: number; signal?: AbortSignal } = {},
+  ): Promise<Song[]> {
+    const pageSize = Math.max(1, Math.trunc(options.pageSize ?? 100));
+    const max = options.max && options.max > 0 ? Math.trunc(options.max) : Infinity;
+    const songs = new Map<string, Song>();
+    let offset = 0;
+    while (songs.size < max) {
+      const page = await this.songs(offset, pageSize, options.signal);
+      if (!page.length) break;
+      let added = 0;
+      for (const song of page) {
+        const id = song.id?.trim();
+        // Paged endpoints can repeat rows near a boundary; keying by ID both
+        // dedupes and gives a reliable termination signal.
+        if (!id || songs.has(id)) continue;
+        songs.set(id, song);
+        added += 1;
+      }
+      // A full page that added nothing new means the server is ignoring the
+      // offset. Stop rather than looping forever.
+      if (!added) break;
+      offset += page.length;
+      if (page.length < pageSize) break;
+    }
+    return [...songs.values()].slice(0, max);
+  }
+
   async favorites(signal?: AbortSignal): Promise<LibraryResults> {
     const data = await this.request<{ starred2?: Partial<LibraryResults> }>(
       "getStarred2",
@@ -502,50 +674,8 @@ export class Navidrome {
   }
 
   async lyrics(song: Song, signal?: AbortSignal): Promise<Lyrics | null> {
-    try {
-      const data = await this.request<{
-        lyricsList?: { structuredLyrics?: StructuredLyrics[] };
-      }>("getLyricsBySongId", { id: song.id }, signal);
-      const options =
-        data.lyricsList?.structuredLyrics?.filter(
-          (option) => option.line?.length,
-        ) ?? [];
-      const lyrics = options.find((option) => option.synced) ?? options[0];
-      if (lyrics?.line) {
-        // OpenSubsonic positive offsets display lyrics sooner, so subtract them.
-        const offset = Number.isFinite(lyrics.offset) ? lyrics.offset! : 0;
-        const lines = lyrics.line.map((line) => ({
-          text: line.value,
-          start:
-            lyrics.synced &&
-            typeof line.start === "number" &&
-            Number.isFinite(line.start)
-              ? Math.max(0, (line.start - offset) / 1000)
-              : undefined,
-        }));
-        return {
-          lines,
-          synced:
-            lyrics.synced && lines.some((line) => line.start !== undefined),
-          language:
-            lyrics.lang === "und" || lyrics.lang === "xxx"
-              ? undefined
-              : lyrics.lang,
-        };
-      }
-    } catch (error) {
-      // Older servers can lack this extension. Cancellation and connectivity errors
-      // skip directly to the external fallback instead of starting a second request.
-      if (isConnectionFailure(error)) return null;
-      if (!(error instanceof NavidromeError)) throw error;
-      if (
-        !(
-          [404, 405, 501].includes(error.status ?? -1) ||
-          [0, 20, 70].includes(error.code ?? -1)
-        )
-      )
-        return null;
-    }
+    const structured = await this.structuredLyrics(song, signal);
+    if (structured) return structured;
     try {
       const data = await this.request<{ lyrics?: { value?: string } }>(
         "getLyrics",
@@ -562,6 +692,46 @@ export class Navidrome {
     }
   }
 
+  /**
+   * OpenSubsonic `songLyrics` v2, which is where word-level timing, vocal
+   * attribution and translation tracks live. Servers older than that reject
+   * the `enhanced` parameter, so the request is retried without it, and a
+   * server with no such endpoint at all reports null so the caller can fall
+   * back to the legacy plain-lyrics endpoint.
+   */
+  private async structuredLyrics(
+    song: Song,
+    signal?: AbortSignal,
+  ): Promise<Lyrics | null> {
+    for (const enhanced of [true, false]) {
+      try {
+        const data = await this.request<{
+          lyricsList?: { structuredLyrics?: StructuredLyrics[] };
+        }>(
+          "getLyricsBySongId",
+          enhanced ? { id: song.id, enhanced: true } : { id: song.id },
+          signal,
+        );
+        const lyrics = lyricsFromStructured(data.lyricsList?.structuredLyrics);
+        return lyrics?.lines.length ? lyrics : null;
+      } catch (error) {
+        // Cancellation and connectivity errors skip straight to the external
+        // fallback rather than starting a second request.
+        if (isConnectionFailure(error)) return null;
+        if (!(error instanceof NavidromeError)) throw error;
+        if (
+          [404, 405, 501].includes(error.status ?? -1) ||
+          [0, 20, 70].includes(error.code ?? -1)
+        )
+          return null;
+        // Anything else may simply be a server that does not know `enhanced`,
+        // so the plain request is worth one attempt.
+        if (!enhanced) return null;
+      }
+    }
+    return null;
+  }
+
   async lrclibLyrics(
     song: Song,
     signal?: AbortSignal,
@@ -574,13 +744,48 @@ export class Navidrome {
       song.duration || "",
     ].join("\u001f");
     if (lrclibCache.has(cacheKey)) return lrclibCache.get(cacheKey) ?? null;
+    // LRCLIB indexes collaborations under the album's primary artist. Keep
+    // the track artist for display, but use albumArtist when the server gives
+    // us one so multi-artist tags do not make the lookup too specific.
+    const artistName = lrclibArtistName(song.albumArtist || song.artist);
     const query = new URLSearchParams({
       track_name: song.title,
-      artist_name: song.artist,
+      artist_name: artistName,
     });
     if (song.album) query.set("album_name", song.album);
     if (song.duration && song.duration > 0 && song.duration <= 3600)
       query.set("duration", String(Math.round(song.duration)));
+
+    // Search returns the available alternatives. Prefer the synced candidate
+    // whose duration is closest to the user's track before using /api/get.
+    const searchQuery = new URLSearchParams({
+      track_name: song.title,
+      artist_name: artistName,
+    });
+    try {
+      const searchResponse = await fetch(
+        `${LRCLIB_SEARCH_ENDPOINT}?${searchQuery}`,
+        {
+          signal,
+          credentials: "omit",
+          headers: { "Lrclib-Client": "Volta Web Player" },
+          referrerPolicy: "no-referrer",
+        },
+      );
+      if (searchResponse.ok) {
+        const syncedLyrics = pickSyncedLrclibResult(
+          await searchResponse.json(),
+          song,
+        );
+        if (syncedLyrics) {
+          lrclibCache.set(cacheKey, syncedLyrics);
+          return syncedLyrics;
+        }
+      }
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      // Let the precise /api/get fallback try before giving up.
+    }
 
     let response: Response;
     try {
@@ -594,32 +799,40 @@ export class Navidrome {
       if (signal?.aborted) throw error;
       return null;
     }
-    if (response.status === 404) {
-      lrclibCache.set(cacheKey, null);
-      return null;
-    }
-    if (!response.ok) return null;
+    const hasGetRecord = response.status !== 404;
+    if (hasGetRecord && !response.ok) return null;
 
-    let record: LrclibLyricsRecord;
-    try {
-      record = (await response.json()) as LrclibLyricsRecord;
-    } catch {
-      return null;
+    let record: LrclibLyricsRecord | null = null;
+    if (hasGetRecord) {
+      try {
+        record = (await response.json()) as LrclibLyricsRecord;
+      } catch {
+        return null;
+      }
     }
-    const syncedLyrics = record.syncedLyrics
-      ? parseLrc(record.syncedLyrics)
-      : null;
+
     const lyrics =
-      syncedLyrics ||
-      (record.plainLyrics && parsePlainLyrics(record.plainLyrics)) ||
+      (record?.syncedLyrics && parseLrc(record.syncedLyrics)) ||
+      (record?.plainLyrics && parsePlainLyrics(record.plainLyrics)) ||
       null;
-    lrclibCache.set(cacheKey, lyrics);
+    // Do not cache misses: rate limits and temporary provider failures should
+    // not make a track appear permanently lyric-less for this browser session.
+    if (lyrics) lrclibCache.set(cacheKey, lyrics);
     return lyrics;
   }
 
   /** active is the song's current favorite state; true removes the favorite. */
   async star(song: Song, active: boolean): Promise<void> {
     await this.request(active ? "unstar" : "star", { id: song.id });
+  }
+
+  /** Favorites are supported for albums and artists as well as songs. */
+  async starAlbum(id: string, active: boolean): Promise<void> {
+    await this.request(active ? "unstar" : "star", { albumId: id });
+  }
+
+  async starArtist(id: string, active: boolean): Promise<void> {
+    await this.request(active ? "unstar" : "star", { artistId: id });
   }
 
   async scrobble(song: Song, submission = false): Promise<void> {
@@ -726,6 +939,25 @@ export function isLossless(song?: Song): boolean {
       "audio/x-aiff",
     ].includes(contentType ?? "")
   );
+}
+
+/** Linear gain for a ReplayGain value in dB, limited so peaks cannot clip. */
+export function replayGainFactor(
+  song: Song | undefined,
+  mode: "off" | "track" | "album",
+): number {
+  if (!song || mode === "off") return 1;
+  const gain =
+    mode === "track" ? song.replayGain?.trackGain : song.replayGain?.albumGain;
+  const peak =
+    mode === "track" ? song.replayGain?.trackPeak : song.replayGain?.albumPeak;
+  if (!Number.isFinite(gain) || !gain) return 1;
+  let factor = Math.pow(10, (gain as number) / 20);
+  // ReplayGain targets a reference loudness; a positive peak above full scale
+  // would clip, so scale back to the loudest safe value.
+  if (Number.isFinite(peak) && (peak as number) * factor > 1)
+    factor = 1 / (peak as number);
+  return Math.max(0, Math.min(4, factor));
 }
 
 export function shuffleSongs(songs: readonly Song[]): Song[] {
