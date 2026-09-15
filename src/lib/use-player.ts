@@ -58,7 +58,7 @@ type PlayerState = {
   automix: boolean;
   /**
    * Non-null while an AutoMix transition is blending, so Now Playing can show
-   * the same "Mixing" indicator Apple Music shows.
+   * the same "Mixing" indicator.
    */
   automixLabel: string | null;
 };

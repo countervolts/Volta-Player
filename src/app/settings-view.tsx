@@ -138,7 +138,7 @@ type Props = {
 };
 
 /**
- * Apple-style leading glyph: a small rounded tile tinted with a system color.
+ * The leading glyph: a small rounded tile tinted with a system color.
  * The tile is decorative, so it is hidden from assistive technology and the
  * row's own label carries the meaning.
  */

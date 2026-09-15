@@ -66,7 +66,7 @@ function quality(
 const playerAlbumArtworkCache = new Map<string, string>();
 
 /**
- * The "Mixing" badge Apple Music shows on Now Playing while AutoMix is
+ * The "Mixing" badge shows on Now Playing while AutoMix is
  * blending two tracks. The reason text is exposed to assistive technology
  * rather than being a second visible line, so the dock does not reflow.
  */
