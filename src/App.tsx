@@ -220,6 +220,7 @@ import {
   readTransitionMode,
   TRANSITION_MODE_KEY,
   VOLUME_SCROLL_STEP_KEY,
+  VOLUME_SHIFT_SCROLL_STEP_KEY,
   type TransitionMode,
   readAccounts,
   readInterfaceScale,
@@ -1399,6 +1400,12 @@ export default function App() {
       ? Math.round(value)
       : 5;
   });
+  const [volumeShiftScrollStep, setVolumeShiftScrollStep] = useState(() => {
+    const value = Number(safeRead(localStorage, VOLUME_SHIFT_SCROLL_STEP_KEY));
+    return Number.isFinite(value) && value >= 1 && value <= 10
+      ? Math.round(value)
+      : 10;
+  });
   const [transitionMode, setTransitionMode] = useState<TransitionMode>(
     readTransitionMode,
   );
@@ -1645,6 +1652,13 @@ export default function App() {
   useEffect(() => {
     safeWrite(localStorage, VOLUME_SCROLL_STEP_KEY, String(volumeScrollStep));
   }, [volumeScrollStep]);
+  useEffect(() => {
+    safeWrite(
+      localStorage,
+      VOLUME_SHIFT_SCROLL_STEP_KEY,
+      String(volumeShiftScrollStep),
+    );
+  }, [volumeShiftScrollStep]);
   useEffect(() => {
     safeWrite(
       localStorage,
@@ -5069,6 +5083,7 @@ export default function App() {
                   connecting={connecting}
                   crossfadeSeconds={crossfadeSeconds}
                   volumeScrollStep={volumeScrollStep}
+                  volumeShiftScrollStep={volumeShiftScrollStep}
                   disconnect={disconnect}
                   engagementEvents={engagementEvents}
                   experimentalArtworkLoading={experimentalArtworkLoading}
@@ -5095,6 +5110,7 @@ export default function App() {
                   setAnimateArtworkEverywhere={setAnimateArtworkEverywhere}
                   setCrossfadeSeconds={setCrossfadeSeconds}
                   setVolumeScrollStep={setVolumeScrollStep}
+                  setVolumeShiftScrollStep={setVolumeShiftScrollStep}
                   setExperimentalArtworkLoading={setExperimentalArtworkLoading}
                   setExternalLyricsEnabled={setExternalLyricsEnabled}
                   setLyricsBlurEnabled={setLyricsBlurEnabled}
@@ -5904,6 +5920,7 @@ export default function App() {
           client={client}
           player={player}
           volumeScrollStep={volumeScrollStep}
+          volumeShiftScrollStep={volumeShiftScrollStep}
           panel={panel}
           onPanel={(value) => setPanel((old) => (old === value ? null : value))}
           onExpand={openFullPlayer}
@@ -5934,6 +5951,7 @@ export default function App() {
         filteredShortcuts={filteredShortcuts}
         frameMonitor={frameMonitor}
         volumeScrollStep={volumeScrollStep}
+        volumeShiftScrollStep={volumeShiftScrollStep}
         fullPlayer={fullPlayer}
         isFavorite={isFavorite}
         listeningEvents={listeningEvents}
