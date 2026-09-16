@@ -88,11 +88,13 @@ function adjustVolumeFromWheel(
   event: ReactWheelEvent<HTMLDivElement>,
   player: Player,
   volumeScrollStep: number,
+  volumeShiftScrollStep: number,
 ) {
   if (!event.deltaY) return;
   event.preventDefault();
   event.stopPropagation();
-  const step = (event.deltaY < 0 ? 1 : -1) * volumeScrollStep / 100;
+  const stepSize = event.shiftKey ? volumeShiftScrollStep : volumeScrollStep;
+  const step = (event.deltaY < 0 ? 1 : -1) * stepSize / 100;
   player.setVolume(Math.round((player.volume + step) * 100) / 100);
 }
 
@@ -234,9 +236,11 @@ function Seek({
 function VolumeControl({
   player,
   volumeScrollStep,
+  volumeShiftScrollStep,
   fullscreen = false,
 }: {  player: Player;
   volumeScrollStep: number;
+  volumeShiftScrollStep: number;
   fullscreen?: boolean;
 }) {
   const percentage = Math.round(player.volume * 100);
@@ -245,7 +249,14 @@ function VolumeControl({
   return (
     <div
       className={className}
-      onWheel={(event) => adjustVolumeFromWheel(event, player, volumeScrollStep)}
+      onWheel={(event) =>
+        adjustVolumeFromWheel(
+          event,
+          player,
+          volumeScrollStep,
+          volumeShiftScrollStep,
+        )
+      }
     >
       <IconButton
         label={player.muted ? "Unmute" : "Mute"}
@@ -283,6 +294,7 @@ export function PlaybackDock({
   client,
   player,
   volumeScrollStep,
+  volumeShiftScrollStep,
   panel,
   onPanel,
   onExpand,
@@ -295,6 +307,7 @@ export function PlaybackDock({
   client: Navidrome;
   player: Player;
   volumeScrollStep: number;
+  volumeShiftScrollStep: number;
   panel: "queue" | "lyrics" | null;
   onPanel: (panel: "queue" | "lyrics") => void;
   onExpand: () => void;
@@ -374,7 +387,11 @@ export function PlaybackDock({
         >
           <ListMusic size={19} />
         </IconButton>
-        <VolumeControl player={player} volumeScrollStep={volumeScrollStep} />
+        <VolumeControl
+          player={player}
+          volumeScrollStep={volumeScrollStep}
+          volumeShiftScrollStep={volumeShiftScrollStep}
+        />
         <IconButton label="Expand player" disabled={!song} onClick={onExpand}>
           <Expand size={17} />
         </IconButton>
@@ -1329,6 +1346,7 @@ export function FullPlayer({
   client,
   player,
   volumeScrollStep,
+  volumeShiftScrollStep,
   onClose,
   onArtist,
   onFavorite,
@@ -1340,6 +1358,7 @@ export function FullPlayer({
   client: Navidrome;
   player: Player;
   volumeScrollStep: number;
+  volumeShiftScrollStep: number;
   onClose: () => void;
   onArtist: (artistId: string, artistName: string) => void;
   onFavorite: (song: Song) => void;
@@ -1450,7 +1469,12 @@ export function FullPlayer({
           </div>
           <Seek player={player} times />
           <Transport player={player} large />
-          <VolumeControl player={player} volumeScrollStep={volumeScrollStep} fullscreen />
+          <VolumeControl
+            player={player}
+            volumeScrollStep={volumeScrollStep}
+            volumeShiftScrollStep={volumeShiftScrollStep}
+            fullscreen
+          />
           <div className="full-player-footer">
             <span>
               <AudioLines size={15} />

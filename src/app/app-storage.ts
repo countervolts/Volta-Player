@@ -95,6 +95,7 @@ export const LISTENING_HISTORY_ENABLED_KEY = "volta-listening-history-enabled";
 export const LISTENING_HISTORY_PERSIST_KEY = "volta-listening-history-persist";
 export const CROSSFADE_KEY = "volta-crossfade-seconds";
 export const VOLUME_SCROLL_STEP_KEY = "volta-volume-scroll-step";
+export const VOLUME_SHIFT_SCROLL_STEP_KEY = "volta-volume-shift-scroll-step";
 /**
  * Song transition mode. `automix` plans a per-transition blend from tempo and
  * key; `crossfade` uses the fixed `CROSSFADE_KEY` duration; `off` is gapless.

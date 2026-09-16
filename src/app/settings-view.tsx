@@ -83,6 +83,7 @@ type Props = {
   connecting: boolean;
   crossfadeSeconds: number;
   volumeScrollStep: number;
+  volumeShiftScrollStep: number;
   disconnect: () => void;
   engagementEvents: EngagementEvent[];
   experimentalArtworkLoading: boolean;
@@ -110,6 +111,7 @@ type Props = {
   setAnimateArtworkEverywhere: Setter<boolean>;
   setCrossfadeSeconds: Setter<number>;
   setVolumeScrollStep: Setter<number>;
+  setVolumeShiftScrollStep: Setter<number>;
   setExperimentalArtworkLoading: Setter<boolean>;
   setExternalLyricsEnabled: Setter<boolean>;
   setLyricsBlurEnabled: Setter<boolean>;
@@ -204,6 +206,7 @@ export function SettingsView({
   connecting,
   crossfadeSeconds,
   volumeScrollStep,
+  volumeShiftScrollStep,
   disconnect,
   engagementEvents,
   experimentalArtworkLoading,
@@ -230,6 +233,7 @@ export function SettingsView({
   setAnimateArtworkEverywhere,
   setCrossfadeSeconds,
   setVolumeScrollStep,
+  setVolumeShiftScrollStep,
   setExperimentalArtworkLoading,
   setExternalLyricsEnabled,
   setLyricsBlurEnabled,
@@ -702,6 +706,36 @@ export function SettingsView({
                               aria-label="Increase volume scroll step"
                               onClick={() =>
                                 setVolumeScrollStep((value) => Math.min(10, value + 1))
+                              }
+                            >
+                              +
+                            </button>
+                          </span>
+                        </div>
+                        <div className="setting-row setting-toggle">
+                          <SettingIcon tone="green">
+                            <Volume2 size={16} />
+                          </SettingIcon>
+                          <span className="setting-copy">
+                            <b>Shift + scroll step</b>
+                            <small>Change the volume by this percentage while holding Shift</small>
+                          </span>
+                          <span className="setting-stepper" aria-label="Shift scroll step">
+                            <button
+                              type="button"
+                              aria-label="Decrease Shift scroll step"
+                              onClick={() =>
+                                setVolumeShiftScrollStep((value) => Math.max(1, value - 1))
+                              }
+                            >
+                              −
+                            </button>
+                            <output>{volumeShiftScrollStep}%</output>
+                            <button
+                              type="button"
+                              aria-label="Increase Shift scroll step"
+                              onClick={() =>
+                                setVolumeShiftScrollStep((value) => Math.min(10, value + 1))
                               }
                             >
                               +
