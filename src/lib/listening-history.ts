@@ -29,6 +29,10 @@ export type ListeningEvent = {
   artistId?: string;
   album?: string;
   albumId?: string;
+  /** Artwork retained with the event so local statistics do not need a refetch. */
+  coverArt?: string;
+  /** Local-library Blob artwork when the song has no remote cover ID. */
+  imageUrl?: string;
   genre?: string;
   durationSeconds: number;
   deltaSeconds: number;
@@ -196,6 +200,8 @@ export function createListeningEvent(
     artistId: normalizeId(song.artistId || song.albumArtist),
     album: safeText(song.album),
     albumId: normalizeId(song.albumId),
+    coverArt: normalizeId(song.coverArt),
+    imageUrl: safeText(song.localArtworkUrl),
     genre: safeText(song.genre),
     durationSeconds,
     deltaSeconds,

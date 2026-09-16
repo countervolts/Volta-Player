@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import {
   ChevronRight,
+  BarChart3,
   CircleUserRound,
   Disc3,
   Folder,
@@ -172,6 +173,16 @@ export function LibrarySidebar({
           >
             <Star />
             <span>Favorites</span>
+          </button>
+        </Tooltip>
+        <Tooltip label={hint("Stats")}>
+          <button
+            className={active("stats")}
+            aria-current={route.page === "stats" ? "page" : undefined}
+            onClick={() => navigate({ page: "stats" })}
+          >
+            <BarChart3 />
+            <span>Stats</span>
           </button>
         </Tooltip>
         <h2>Playlists</h2>

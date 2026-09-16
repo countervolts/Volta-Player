@@ -3424,6 +3424,409 @@ p {
   gap: 8px;
   flex: 0 0 auto;
 }
+.stats-view {
+  display: grid;
+  width: 100%;
+  gap: 20px;
+  padding-bottom: 24px;
+}
+.stats-intro {
+  max-width: 660px;
+  margin: -5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.stats-period-tabs {
+  display: inline-flex;
+  justify-self: start;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.stats-period-tabs button {
+  min-width: 58px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.stats-period-tabs button:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.stats-period-tabs button.selected {
+  color: var(--text);
+  background: var(--canvas);
+  box-shadow: 0 1px 2px #0002;
+}
+.stats-period-nav {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto 32px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.stats-period-nav > strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-period-arrow,
+.stats-current {
+  display: inline-grid;
+  place-items: center;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+}
+.stats-period-arrow:hover:not(:disabled),
+.stats-current:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--text);
+  background: var(--hover);
+}
+.stats-current {
+  min-width: 73px;
+  padding-inline: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.stats-current.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+.stats-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  min-height: 238px;
+  padding: 52px 24px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  text-align: center;
+}
+.stats-empty-state > svg {
+  color: var(--accent);
+  opacity: 0.85;
+}
+.stats-empty-state h2 {
+  margin: 5px 0 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+}
+.stats-empty-state p {
+  max-width: 390px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.stats-empty-state .secondary-button {
+  margin-top: 5px;
+}
+.stats-section {
+  display: grid;
+  gap: 12px;
+}
+.stats-section-heading,
+.stats-chart-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.stats-section-heading {
+  color: var(--secondary);
+}
+.stats-section-heading h2,
+.stats-chart-card h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(152px, 1fr));
+  gap: 12px;
+}
+.stats-card,
+.stats-chart-card,
+.stats-info-bar {
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.stats-card {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-height: 136px;
+  padding: 16px;
+  border-radius: 8px;
+}
+.stats-card-icon {
+  display: grid;
+  width: 21px;
+  height: 21px;
+  margin-bottom: 2px;
+  color: var(--accent);
+}
+.stats-card-label,
+.stats-chart-heading > span,
+.stats-chart-card > h2 {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.stats-card strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 23px;
+  font-weight: 680;
+  letter-spacing: -0.5px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-card small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-info-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 25px;
+  padding: 10px 14px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.stats-info-bar b {
+  margin-left: 4px;
+  color: var(--text);
+  font-weight: 600;
+}
+.stats-chart-card {
+  min-width: 0;
+  padding: 18px;
+  border-radius: 8px;
+}
+.stats-graph-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.stats-recharts-card {
+  min-height: 238px;
+}
+.stats-recharts-chart {
+  height: 183px;
+}
+.stats-recharts-chart .recharts-cartesian-axis-tick-value {
+  fill: var(--muted);
+}
+.stats-recharts-chart .recharts-tooltip-cursor {
+  transition: none;
+}
+.stats-chart-heading {
+  justify-content: space-between;
+  margin-bottom: 13px;
+}
+.stats-lower-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+.stats-genre-card {
+  min-height: 224px;
+}
+.stats-ranking-card {
+  min-height: 0;
+}
+.stats-ranking-card > h2,
+.stats-genre-card > h2 {
+  margin-bottom: 9px;
+}
+.stats-rank-list,
+.stats-genre-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.stats-rank-list li {
+  display: grid;
+  grid-template-columns: 21px 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 39px;
+  padding: 4px 5px;
+  border-radius: 5px;
+}
+.stats-rank-artwork {
+  width: 34px;
+  height: 34px;
+  border-radius: 4px;
+}
+.stats-rank-artwork.stats-rank-artwork-artist {
+  border-radius: 50%;
+}
+.stats-rank-artwork .artwork,
+.stats-rank-artwork img {
+  border-radius: inherit;
+}
+.stats-rank-list li:hover {
+  background: var(--hover);
+}
+.stats-rank-number,
+.stats-rank-count {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.stats-rank-number {
+  text-align: right;
+}
+.stats-rank-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+.stats-rank-copy b,
+.stats-rank-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-rank-copy b {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 550;
+}
+.stats-rank-copy small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.stats-rank-count {
+  color: var(--accent);
+  font-weight: 650;
+}
+.stats-genre-list {
+  align-content: center;
+  gap: 9px;
+  min-width: 0;
+}
+.stats-genre-list li {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.stats-genre-list i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.stats-genre-label {
+  overflow: hidden;
+  color: var(--secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-genre-chart {
+  display: grid;
+  grid-template-columns: minmax(105px, 0.8fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-height: 170px;
+}
+.stats-genre-visual {
+  width: min(100%, 168px);
+  height: 168px;
+  justify-self: center;
+}
+.stats-list-empty {
+  margin: 20px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+@media (max-width: 640px) {
+  .stats-view {
+    gap: 18px;
+  }
+  .stats-period-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    width: 100%;
+  }
+  .stats-period-tabs button {
+    min-width: 0;
+  }
+  .stats-period-nav {
+    grid-template-columns: 31px minmax(0, 1fr) 31px;
+  }
+  .stats-period-nav > strong {
+    font-size: 12px;
+  }
+  .stats-current {
+    display: none;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .stats-card {
+    min-height: 117px;
+    padding: 12px;
+  }
+  .stats-card strong {
+    font-size: 20px;
+  }
+  .stats-info-bar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .stats-lower-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .stats-graph-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .stats-recharts-card {
+    min-height: 220px;
+  }
+  .stats-recharts-chart {
+    height: 150px;
+  }
+  .stats-genre-chart {
+    grid-template-columns: minmax(110px, 0.75fr) minmax(0, 1fr);
+  }
+}
 .listening-history-dialog {
   width: min(700px, calc(100vw - 32px));
 }
