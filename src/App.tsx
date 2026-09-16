@@ -4,9 +4,11 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  lazy,
   useMemo,
   useRef,
   useState,
+  Suspense,
   type FormEvent,
   type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -251,6 +253,10 @@ import {
   type SavedAccount,
   type ShareProvider,
 } from "./app/app-storage";
+
+const StatsView = lazy(() =>
+  import("./app/stats-view").then(({ StatsView: View }) => ({ default: View })),
+);
 const LIBRARY_CACHE_TTL = 15 * 60 * 1000;
 const libraryCacheKey = (server: string, username: string, loadKey: string) =>
   `volta-library-cache:${encodeURIComponent(server)}:${encodeURIComponent(username)}:${encodeURIComponent(loadKey)}`;
@@ -386,6 +392,7 @@ const TITLES: Record<Page, string> = {
   album: "Album",
   artist: "Artist",
   playlist: "Playlist",
+  stats: "Stats",
   settings: "Settings",
 };
 const splitGenres = (value?: string) =>
@@ -840,6 +847,8 @@ const localPageData = (
       };
     }
     case "genre":
+      return EMPTY;
+    case "stats":
       return EMPTY;
     case "played":
     case "playlists":
@@ -2635,6 +2644,8 @@ export default function App() {
           };
         }
         case "genre":
+          return EMPTY;
+        case "stats":
           return EMPTY;
         case "settings":
           return EMPTY;
@@ -4922,10 +4933,10 @@ export default function App() {
             >
               <ChevronLeft size={22} />
             </IconButton>
-            <span>{route.page === "settings" ? "Settings" : isDetail ? title : "Your Library"}</span>
+            <span>{route.page === "settings" || route.page === "stats" ? title : isDetail ? title : "Your Library"}</span>
           </div>
           <div className="toolbar-trailing">
-            {route.page === "settings" || route.page === "folders" ? null : (
+            {route.page === "settings" || route.page === "folders" || route.page === "stats" ? null : (
               <>
                 {(["search", "genre"].includes(route.page)) ? (
                   <>
@@ -4978,12 +4989,12 @@ export default function App() {
           id="main-content"
           aria-busy={pending}
         >
-          {pending && data !== EMPTY && route.page !== "settings" && (
+          {pending && data !== EMPTY && route.page !== "settings" && route.page !== "stats" && (
             <div className="view-refreshing" role="status" aria-label="Updating library">
               <LoaderCircle className="spin" size={15} />
             </div>
           )}
-          {pending && data === EMPTY && route.page !== "search" && route.page !== "settings" ? (
+          {pending && data === EMPTY && route.page !== "search" && route.page !== "settings" && route.page !== "stats" ? (
             <LoadingState />
           ) : pageError ? (
             <EmptyState title="Unable to load music" message={pageError}>
@@ -5146,6 +5157,16 @@ export default function App() {
                   warnBeforeLeave={warnBeforeLeave}
                   setWarnBeforeLeave={setWarnBeforeLeave}
                 />
+              )}
+              {route.page === "stats" && (
+                <Suspense fallback={<LoadingState />}>
+                  <StatsView
+                    client={client}
+                    enabled={listeningHistoryEnabled}
+                    events={listeningEvents}
+                    onOpenSettings={() => navigate({ page: "settings" })}
+                  />
+                </Suspense>
               )}
               {route.page === "home" && (
                 <>

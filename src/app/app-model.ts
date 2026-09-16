@@ -15,6 +15,7 @@ export type Page =
   | "album"
   | "artist"
   | "playlist"
+  | "stats"
   | "settings";
 export type SettingsFocus = "external-lyrics" | "local-data" | "recommendation-tuning";
 export type Route = {
