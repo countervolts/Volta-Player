@@ -936,16 +936,14 @@ export function SettingsView({
                               <Gauge size={16} />
                             </SettingIcon>
                             <span className="setting-copy">
-                              <b>Frame rate monitor</b>
+                              <b>Performance overlay</b>
                               <small>
-                                Show frame rate, frame-time graph, and the
-                                measured frame cadence over the full-screen
-                                player. Useful for checking what the animated
-                                backdrop costs.
+                                Show rendering, runtime, network, and device
+                                diagnostics in the beta player.
                               </small>
                             </span>
                             <input
-                              aria-label="Frame rate monitor"
+                              aria-label="Performance overlay"
                               type="checkbox"
                               checked={frameMonitorEnabled}
                               onChange={(event) =>

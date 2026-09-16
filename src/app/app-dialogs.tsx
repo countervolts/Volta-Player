@@ -57,7 +57,7 @@ type Props = {
   engineOpen: boolean;
   externalLyricsEnabled: boolean;
   lyricsBlurEnabled: boolean;
-  /** Beta-only: show the frame rate overlay in the full-screen player. */
+  /** Beta-only: show the performance overlay in the full-screen player. */
   frameMonitor: boolean;
   favorite: (song: Song) => void | Promise<void>;
   filteredShortcuts: ShortcutDefinition[];

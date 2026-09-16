@@ -37,7 +37,6 @@ import {
   Modal,
   type ContextMenuItem,
 } from "./components";
-import { FrameMonitor } from "./app/frame-monitor";
 import {
   duration,
   isLocalSong,
@@ -1365,7 +1364,7 @@ export function FullPlayer({
   favorite: boolean;
   externalLyricsEnabled?: boolean;
   lyricsBlurEnabled?: boolean;
-  /** Beta-only: show the frame rate and frame-time overlay. */
+  /** Beta-only: show the performance overlay. */
   frameMonitor?: boolean;
 }) {
   const [panel, setPanel] = useState<"queue" | "lyrics">("lyrics");
@@ -1431,7 +1430,6 @@ export function FullPlayer({
         artworkUrl={artworkUrl}
         songId={song.id}
       />
-      {frameMonitor ? <FrameMonitor /> : null}
       <div className="full-player-layout">
         <section className="full-record">
           <Artwork
