@@ -12,6 +12,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type RefObject,
+  type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -190,6 +191,7 @@ import { Connect } from "./app/connect";
 import { FolderView } from "./app/folder-view";
 import { LibrarySidebar } from "./app/library-sidebar";
 import { SettingsView } from "./app/settings-view";
+import { PerformanceOverlay } from "./app/performance-overlay";
 import { AppDialogs } from "./app/app-dialogs";
 import {
   accountKey,
@@ -4794,6 +4796,11 @@ export default function App() {
                   max="150"
                   step="1"
                   value={scalePreview}
+                  style={
+                    {
+                      "--progress": `${((scalePreview - 70) / 80) * 100}%`,
+                    } as CSSProperties
+                  }
                   onChange={(event) =>
                     setPreviewInterfaceScale(Number(event.target.value))
                   }
@@ -5949,7 +5956,7 @@ export default function App() {
         lyricsBlurEnabled={lyricsBlurEnabled}
         favorite={favorite}
         filteredShortcuts={filteredShortcuts}
-        frameMonitor={frameMonitor}
+        frameMonitor={betaChannel && frameMonitor}
         volumeScrollStep={volumeScrollStep}
         volumeShiftScrollStep={volumeShiftScrollStep}
         fullPlayer={fullPlayer}
@@ -5994,6 +6001,7 @@ export default function App() {
         sidebarPlaylists={sidebarPlaylists}
         updateRecommendationTuning={updateRecommendationTuning}
       />
+      {betaChannel && frameMonitor ? <PerformanceOverlay /> : null}
       <ContextMenu
         point={pageContextPoint}
         items={pageContextItems}

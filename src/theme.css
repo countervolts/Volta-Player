@@ -2376,51 +2376,159 @@ p {
   white-space: pre-wrap;
 }
 
-.frame-monitor {
-  /* Beta-only diagnostics overlay. Deliberately plain — no backdrop-filter, no
-     shadow — because anything expensive here would show up in the very numbers
-     it exists to measure. */
-  position: absolute;
-  right: 20px;
-  bottom: 14px;
-  z-index: 3;
+.performance-overlay {
+  position: fixed;
+  top: max(54px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(54px, env(safe-area-inset-bottom));
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: min(348px, calc(100vw - 24px));
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--sidebar) 97%, var(--canvas));
+  box-shadow: 0 12px 34px #0000002b;
+  color: var(--text);
+  /* Read-only diagnostics must never block the app underneath. */
+  pointer-events: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+.performance-overlay-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 58px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+.performance-overlay-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.performance-overlay-title i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #4cd47a;
+  box-shadow: 0 0 0 4px #4cd47a1f;
+}
+.performance-overlay-title strong,
+.performance-overlay-title span {
+  display: block;
+}
+.performance-overlay-title strong {
+  font-size: 14px;
+  letter-spacing: -0.2px;
+}
+.performance-overlay-title span,
+.performance-overlay-status {
+  color: var(--muted);
+  font-size: 10px;
+}
+.performance-overlay-status {
+  max-width: 110px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.performance-overlay-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 3px 18px 12px;
+  scrollbar-color: color-mix(in srgb, var(--text) 20%, transparent) transparent;
+  scrollbar-width: thin;
+}
+.performance-overlay-section {
+  display: grid;
+  gap: 6px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+.performance-overlay-section:last-child {
+  border-bottom: 0;
+  padding-bottom: 2px;
+}
+.performance-overlay-section h2 {
+  margin: 0;
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.performance-overlay-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+}
+.performance-overlay-key-grid {
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--row);
+}
+.performance-overlay-list {
   display: grid;
   gap: 5px;
-  padding: 8px 10px;
-  border: 1px solid #ffffff26;
-  border-radius: 8px;
-  background: #000000d9;
-  pointer-events: none;
-  font-variant-numeric: tabular-nums;
 }
-.frame-monitor-readout {
+.performance-overlay-metric {
+  min-width: 0;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 14px;
-  /* The stats line is the wide one; wrapping it would resize the panel and
-     make the chart jump, so the panel is sized to fit it. */
-  width: max-content;
+}
+.performance-overlay-metric b {
+  overflow: hidden;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  font-weight: 500;
+  text-align: right;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.frame-monitor-readout b {
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-}
-.frame-monitor-readout span {
-  color: #ffffff9e;
-  font-size: 10px;
-}
-.frame-monitor-pacing {
-  color: #ffffff9e;
-  font-size: 10px;
+.performance-overlay-metric span {
+  min-width: 0;
+  color: var(--muted);
   white-space: nowrap;
 }
-.frame-monitor-chart {
+.performance-overlay-key-grid .performance-overlay-metric {
   display: block;
-  border-radius: 3px;
-  background: #ffffff0f;
+}
+.performance-overlay-key-grid .performance-overlay-metric span {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 9px;
+}
+.performance-overlay-key-grid .performance-overlay-metric b {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+}
+.performance-overlay-chart {
+  display: block;
+  width: 100% !important;
+  height: 60px !important;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--canvas) 62%, transparent);
+}
+@media (max-width: 720px) {
+  .performance-overlay {
+    top: auto;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    max-height: min(58dvh, 540px);
+  }
 }
 
 .dialog-overlay {
@@ -2834,6 +2942,42 @@ p {
 .scale-preview-slider {
   flex: 1;
   min-width: 0;
+  accent-color: var(--accent);
+  background: linear-gradient(
+    to right,
+    var(--accent) var(--progress),
+    var(--line) var(--progress)
+  );
+}
+.scale-preview-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 24%, transparent);
+  cursor: grab;
+}
+.scale-preview-slider:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  transform: scale(1.08);
+}
+.scale-preview-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 24%, transparent);
+  cursor: grab;
+}
+.scale-preview-slider:active::-moz-range-thumb {
+  cursor: grabbing;
+  transform: scale(1.08);
 }
 .scale-preview-actions {
   display: flex;
@@ -4078,6 +4222,31 @@ p {
 }
 .show-times input {
   margin: 0;
+}
+.fullscreen-dialog .show-times {
+  position: relative;
+  display: block;
+}
+.fullscreen-dialog .show-times input {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  left: 39px;
+  width: auto;
+  margin: 0;
+}
+.fullscreen-dialog .show-times span {
+  position: absolute;
+  top: -1px;
+  z-index: 1;
+}
+.fullscreen-dialog .show-times span:first-child {
+  left: 8px;
+}
+.fullscreen-dialog .show-times span:last-child {
+  /* The volume track owns the record's right edge. Put the remaining time in
+     the adjacent layout gutter so it never covers that endpoint. */
+  right: -32px;
 }
 .transport-controls.large {
   justify-content: center;
