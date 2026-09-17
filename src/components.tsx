@@ -43,7 +43,12 @@ import {
   type Navidrome,
   type Song,
 } from "./lib/navidrome";
-import { discardArtworkStill, loadArtworkStill } from "./lib/artwork";
+import {
+  discardArtworkStill,
+  discardArtworkStillCanvas,
+  loadArtworkStill,
+  loadArtworkStillCanvas,
+} from "./lib/artwork";
 
 const ArtworkMotionContext = createContext({
   enabled: true,
@@ -615,8 +620,10 @@ const StandardArtwork = memo(function StandardArtwork({
   const resized = imageUrl || client.cover(id, size);
   const [kind, setKind] = useState<"animated" | "static" | undefined>(original ? undefined : "static");
   const [frozen, setFrozen] = useState("");
+  const [canvasStill, setCanvasStill] = useState<HTMLCanvasElement | null>(null);
   const [near, setNear] = useState(eager || loadEager);
   const artworkRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const active = eager || loadEager || near;
   const activeRef = useRef(active);
   const artworkSourceRef = useRef(resized);
@@ -643,10 +650,22 @@ const StandardArtwork = memo(function StandardArtwork({
           return frame;
         })
         .catch(() => {
-          // No usable still (e.g. Firefox RFP poisons canvas readback). Fall
-          // back to the original blob URL, which renders the first frame.
-          if (artworkSourceRef.current === resized) setKind("static");
-          return undefined;
+          // Firefox RFP poisons pixel readback, so use a displayed canvas
+          // instead of a data URL. This keeps the setting static without
+          // reading the canvas back. The helper captures frame 2.
+          return loadArtworkStillCanvas(resized, blob)
+            .then((canvas) => {
+              if (artworkSourceRef.current !== resized || !activeRef.current) {
+                discardArtworkStillCanvas(resized);
+                return null;
+              }
+              setCanvasStill(canvas);
+              return null;
+            })
+            .catch(() => {
+              if (artworkSourceRef.current === resized) setKind("static");
+              return undefined;
+            });
         });
     }
     return undefined;
@@ -672,6 +691,19 @@ const StandardArtwork = memo(function StandardArtwork({
     setFrozen("");
   }, [active, frozen, resized]);
   useEffect(() => {
+    if (active || !canvasStill || !resized) return;
+    discardArtworkStillCanvas(resized);
+    setCanvasStill(null);
+  }, [active, canvasStill, resized]);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvasStill || !canvas) return;
+    canvas.width = canvasStill.width;
+    canvas.height = canvasStill.height;
+    const context = canvas.getContext("2d");
+    if (context) context.drawImage(canvasStill, 0, 0);
+  }, [canvasStill]);
+  useEffect(() => {
     setNear(eager || loadEager);
     const element = artworkRef.current;
     if (!element || typeof IntersectionObserver === "undefined") return;
@@ -692,13 +724,18 @@ const StandardArtwork = memo(function StandardArtwork({
   useEffect(() => {
     setKind(original ? undefined : "static");
     setFrozen("");
+    setCanvasStill(null);
   }, [original, resized]);
   // Grid: frozen frame only. Prominent views: original animation.
   // Keep loaded artwork visible while frame 2 is being extracted.
   // Swap to static frame only after extraction succeeds.
   const src = animate ? original : kind === "animated" ? frozen || resized : resized;
   return <div ref={artworkRef} data-artwork-id={id || imageUrl || ""} className={`artwork ${className}`}>
-    {src ? <ArtworkImage key={src} src={src} alt={label} eager={eager || loadEager} active={active} discardAnimated={!animate} onType={handleArtworkType} /> : <Music2 aria-hidden="true" />}
+    {animate || !canvasStill ? (
+      src ? <ArtworkImage key={src} src={src} alt={label} eager={eager || loadEager} active={active} discardAnimated={!animate} onType={handleArtworkType} /> : <Music2 aria-hidden="true" />
+    ) : (
+      <canvas ref={canvasRef} aria-label={label} role={label ? "img" : undefined} />
+    )}
   </div>;
 });
 
