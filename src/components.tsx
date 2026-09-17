@@ -1019,6 +1019,7 @@ export const TrackTable = memo(function TrackTable({
       className={
         "track-table" +
         (compact ? " album-tracks" : "") +
+        (playlistView ? " playlist-tracks" : "") +
         (selecting ? " selecting" : "")
       }
     >
@@ -1128,7 +1129,7 @@ export const TrackTable = memo(function TrackTable({
             }
             onDoubleClick={() => !selecting && onPlay(songs, index, true)}
           >
-            {!compact && (
+            {(!compact || playlistView) && (
               <Artwork
                 client={client}
                 id={song.coverArt}
@@ -1138,7 +1139,9 @@ export const TrackTable = memo(function TrackTable({
             )}
             <span>
               <b>{song.title}</b>
-              {!compact && <small>{song.artist || "Unknown artist"}</small>}
+              {(!compact || playlistView) && (
+                <small>{song.artist || "Unknown artist"}</small>
+              )}
             </span>
             {isFavorite(song) && <Star size={12} fill="currentColor" />}
           </button>

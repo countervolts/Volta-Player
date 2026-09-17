@@ -3883,6 +3883,13 @@ export default function App() {
   const visibleArtistSongs = artistSongsExpanded
     ? artistSongs
     : artistSongs.slice(0, 8);
+  const latestArtistAlbum = useMemo(
+    () =>
+      [...visibleAlbums].sort(
+        (left, right) => (right.year || 0) - (left.year || 0),
+      )[0],
+    [visibleAlbums],
+  );
   const artistSongsHavePopularity = artistSongs.some((song) =>
     Number.isFinite(song.playCount),
   );
@@ -4985,7 +4992,10 @@ export default function App() {
         </header>
         <main
           ref={pageRef}
-          className="main-content"
+          className={
+            "main-content" +
+            (route.page === "artist" ? " artist-page-content" : "")
+          }
           id="main-content"
           aria-busy={pending}
         >
@@ -5466,13 +5476,23 @@ export default function App() {
               {(route.page === "album" || route.page === "playlist") && (
                 <>
                   <div className="collection-header">
-                    <Artwork
-                      client={client}
-                      id={data.album?.coverArt || data.playlist?.coverArt}
-                      imageUrl={data.album?.localArtworkUrl}
-                      size={700}
-                      eager
-                    />
+                    <div className="collection-artwork-stack">
+                      <Artwork
+                        client={client}
+                        id={data.album?.coverArt || data.playlist?.coverArt}
+                        imageUrl={data.album?.localArtworkUrl}
+                        size={700}
+                        className="collection-artwork-radiosity"
+                        loadEager
+                      />
+                      <Artwork
+                        client={client}
+                        id={data.album?.coverArt || data.playlist?.coverArt}
+                        imageUrl={data.album?.localArtworkUrl}
+                        size={700}
+                        eager
+                      />
+                    </div>
                     <div className="collection-info">
                       <p className="collection-kind">
                         {route.page === "playlist" ? "Playlist" : "Album"}
@@ -5646,43 +5666,43 @@ export default function App() {
                 </>
               )}
               {route.page === "artist" && (
-                <>
+                <div className="artist-page">
                   <div className="artist-header">
                     <Artwork
                       client={client}
                       id={data.artist?.coverArt}
                       imageUrl={data.artist?.artistImageUrl || data.artist?.localArtworkUrl}
-                      size={400}
+                      size={1200}
+                      label={data.artist?.name}
+                      eager
                     />
-                    <div>
-                      <p className="collection-kind">Artist</p>
+                    <div className="artist-header-shade" aria-hidden="true" />
+                    {data.artist && (
+                      <button
+                        className="artist-share-action"
+                        aria-label="Copy Share Link"
+                        title="Copy Share Link"
+                        onClick={() => shareArtist(data.artist!)}
+                      >
+                        <Copy size={17} />
+                      </button>
+                    )}
+                    <div className="artist-header-content">
                       <h1>{data.artist?.name}</h1>
                       <p>{data.albums.length} albums in your library</p>
                       <div className="artist-actions">
                         {data.artist && (
                           <button
-                            className="secondary-button"
-                            aria-pressed={isArtistFavorite(data.artist)}
-                            onClick={() =>
-                              data.artist && void favoriteArtist(data.artist)
+                            aria-label={
+                              isPinned("artist", data.artist.id)
+                                ? "Unpin"
+                                : "Pin"
                             }
-                          >
-                            <Star
-                              size={15}
-                              fill={
-                                isArtistFavorite(data.artist)
-                                  ? "currentColor"
-                                  : "none"
-                              }
-                            />
-                            {isArtistFavorite(data.artist)
-                              ? "Favorited"
-                              : "Favorite"}
-                          </button>
-                        )}
-                        {data.artist && (
-                          <button
-                            className="secondary-button"
+                            title={
+                              isPinned("artist", data.artist.id)
+                                ? "Unpin"
+                                : "Pin"
+                            }
                             aria-pressed={isPinned("artist", data.artist.id)}
                             onClick={() =>
                               data.artist &&
@@ -5697,81 +5717,122 @@ export default function App() {
                               })
                             }
                           >
-                            <Pin size={15} />
-                            {isPinned("artist", data.artist.id)
-                              ? "Unpin"
-                              : "Pin"}
+                            <Pin size={17} fill={isPinned("artist", data.artist.id) ? "currentColor" : "none"} />
                           </button>
                         )}
+                        <button
+                          className="artist-play-action"
+                          aria-label={`Play ${data.artist?.name || "artist"}`}
+                          title={`Play ${data.artist?.name || "artist"}`}
+                          disabled={!artistSongs.length}
+                          onClick={() => player.playSongs(artistSongs)}
+                        >
+                          <Play size={25} fill="currentColor" />
+                        </button>
                         {data.artist && (
                           <button
-                            className="secondary-button"
-                            onClick={() => shareArtist(data.artist!)}
+                            aria-label={
+                              isArtistFavorite(data.artist)
+                                ? "Favorited"
+                                : "Favorite"
+                            }
+                            title={
+                              isArtistFavorite(data.artist)
+                                ? "Favorited"
+                                : "Favorite"
+                            }
+                            aria-pressed={isArtistFavorite(data.artist)}
+                            onClick={() =>
+                              data.artist && void favoriteArtist(data.artist)
+                            }
                           >
-                            <Copy size={15} />
-                            Copy Share Link
+                            <Star
+                              size={18}
+                              fill={
+                                isArtistFavorite(data.artist)
+                                  ? "currentColor"
+                                  : "none"
+                              }
+                            />
                           </button>
                         )}
                       </div>
                     </div>
                   </div>
-                  <section className="music-section">
-                    <div className="section-heading">
-                      <h2>Songs</h2>
-                      <span>
-                        {artistSongsHavePopularity ? "Most played first · " : ""}
-                        {artistSongs.length}
-                      </span>
-                    </div>
-                    {artistSongs.length ? (
-                      <>
-                        <div id="artist-songs-list">
-                          {songTable(visibleArtistSongs, false, false)}
-                        </div>
-                        {artistSongs.length > 8 && (
-                          <div className="artist-songs-more">
-                            <button
-                              className="secondary-button"
-                              type="button"
-                              aria-controls="artist-songs-list"
-                              aria-expanded={artistSongsExpanded}
-                              onClick={() =>
-                                setExpandedArtistSongsId(
-                                  artistSongsExpanded ? null : data.artist?.id || null,
-                                )
-                              }
-                            >
-                              {artistSongsExpanded ? "Show less" : "Show more"}
-                            </button>
-                            {!artistSongsExpanded && (
-                              <span>Showing the first 8 songs</span>
-                            )}
+                  <div className="artist-page-body">
+                    <div className="artist-feature-grid">
+                      {latestArtistAlbum && (
+                        <section className="music-section artist-latest-release">
+                          <div className="section-heading">
+                            <h2>Latest Release</h2>
+                            {latestArtistAlbum.year ? (
+                              <span>{latestArtistAlbum.year}</span>
+                            ) : null}
                           </div>
+                          {albumGrid([latestArtistAlbum], false, true, false)}
+                        </section>
+                      )}
+                      <section className="music-section artist-top-songs">
+                        <div className="section-heading">
+                          <h2>Top Songs</h2>
+                          <span>
+                            {artistSongsHavePopularity ? "Most played first · " : ""}
+                            {artistSongs.length}
+                          </span>
+                        </div>
+                        {artistSongs.length ? (
+                          <>
+                            <div id="artist-songs-list">
+                              {songTable(visibleArtistSongs, false, false)}
+                            </div>
+                            {artistSongs.length > 8 && (
+                              <div className="artist-songs-more">
+                                <button
+                                  className="secondary-button"
+                                  type="button"
+                                  aria-controls="artist-songs-list"
+                                  aria-expanded={artistSongsExpanded}
+                                  onClick={() =>
+                                    setExpandedArtistSongsId(
+                                      artistSongsExpanded
+                                        ? null
+                                        : data.artist?.id || null,
+                                    )
+                                  }
+                                >
+                                  {artistSongsExpanded ? "Show less" : "Show more"}
+                                </button>
+                                {!artistSongsExpanded && (
+                                  <span>Showing the first 8 songs</span>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <EmptyState
+                            title="No artist songs found"
+                            message="This artist has no matching songs in the library."
+                          />
                         )}
-                      </>
-                    ) : (
-                      <EmptyState
-                        title="No artist songs found"
-                        message="This artist has no matching songs in the library."
-                      />
-                    )}
-                  </section>
-                  <section className="music-section">
-                    <div className="section-heading">
-                      <h2>Albums</h2>
+                      </section>
                     </div>
-                    {albumGrid(visibleAlbums)}
-                  </section>
-                  {data.similarArtists.length > 0 && (
-                    <section className="music-section related-section">
+                    <section className="music-section">
                       <div className="section-heading">
-                        <h2>You might also like</h2>
-                        <span>Artists</span>
+                        <h2>Albums</h2>
                       </div>
-                      {artistGrid(data.similarArtists)}
+                      {albumGrid(visibleAlbums)}
                     </section>
-                  )}
-                </>
+                    {data.similarArtists.length > 0 && (
+                      <section className="music-section related-section">
+                        <div className="section-heading">
+                          <h2>You might also like</h2>
+                          <span>Artists</span>
+                        </div>
+                        {artistGrid(data.similarArtists)}
+                      </section>
+                    )}
+                  </div>
+                </div>
               )}
               {route.page === "search" &&
                 (!debouncedQuery ? (
