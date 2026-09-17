@@ -1,3 +1,5 @@
+import { canvasReadbackUnreliable } from "./canvas-readback";
+
 export type ArtworkPalette = {
   /** Dominant, most saturated color. Drives the primary glow. */
   primary: string;
@@ -438,6 +440,9 @@ function buildPalette(pixels: Uint8ClampedArray): ArtworkPalette {
 }
 
 async function decodePalette(src: string): Promise<ArtworkPalette> {
+  // Firefox RFP randomises getImageData, which would yield a nonsense palette.
+  // Fail fast so the caller uses the fallback palette instead.
+  if (canvasReadbackUnreliable()) throw new Error("Canvas readback unavailable");
   const response = await fetch(src, {
     credentials: "omit",
     referrerPolicy: "no-referrer",
