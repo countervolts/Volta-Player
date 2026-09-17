@@ -643,8 +643,10 @@ const StandardArtwork = memo(function StandardArtwork({
           return frame;
         })
         .catch(() => {
+          // No usable still (e.g. Firefox RFP poisons canvas readback). Fall
+          // back to the original blob URL, which renders the first frame.
           if (artworkSourceRef.current === resized) setKind("static");
-          return null;
+          return undefined;
         });
     }
     return undefined;

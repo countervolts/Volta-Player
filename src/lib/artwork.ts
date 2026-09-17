@@ -1,3 +1,5 @@
+import { canvasReadbackUnreliable } from "./canvas-readback";
+
 const stillCache = new Map<string, string>();
 const stillPending = new Map<string, Promise<string>>();
 let stillBytes = 0;
@@ -16,6 +18,7 @@ export function loadArtworkStill(src: string, providedBlob?: Blob): Promise<stri
   const pending = stillPending.get(src);
   if (pending) return pending;
   const request = (async () => {
+    if (canvasReadbackUnreliable()) throw new Error("Canvas readback unavailable");
     let blob: Blob;
     if (providedBlob) blob = providedBlob;
     else {
