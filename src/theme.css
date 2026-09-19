@@ -433,18 +433,14 @@ p {
 .password-toggle:hover {
   color: var(--text);
 }
+
 .connection-fields label:nth-child(2) input,
-.connection-fields label:nth-child(3) input {
-  direction: rtl;
-  unicode-bidi: plaintext;
-}
 .connection-fields label:nth-child(3) input {
   direction: ltr;
   unicode-bidi: normal;
 }
 .connection-fields label:focus-within {
   background: var(--surface);
-  box-shadow: inset 3px 0 var(--accent);
 }
 .connect-submit {
   width: 100%;
@@ -6482,4 +6478,203 @@ p {
   .finder-list-row > span:nth-child(4) {
     display: none;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Dropdowns
+
+   `select` is restyled rather than replaced with a custom listbox. The element
+   still renders the platform's own popup, which is what users expect from a
+   native app; only the closed control is redrawn so it no longer looks like a
+   default form field. The chevron is an inline SVG background so it follows the
+   accent colour and needs no extra markup, and every existing `select` gains
+   this automatically.
+   --------------------------------------------------------------------------- */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 7px 32px 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  background-color: var(--surface);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 17px) calc(50% + 1px),
+    calc(100% - 12px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+select:hover {
+  border-color: color-mix(in srgb, var(--text) 26%, transparent);
+  background-color: var(--hover);
+}
+select:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The opened list is drawn by the platform, so keep its items readable on the
+   dark surface rather than defaulting to a white menu. */
+select option {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------------------
+   Checkboxes
+
+   A drawn box instead of the platform control, so it matches the rest of the
+   interface in both themes. The tick is a mask-free inline SVG that is revealed
+   by opacity, so no pseudo-element trickery is needed for the mark itself. The
+   native element stays in the DOM and keeps focus, keyboard support and
+   accessibility; only its paint is replaced.
+   --------------------------------------------------------------------------- */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border: 1.5px solid color-mix(in srgb, var(--text) 32%, transparent);
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+input[type="checkbox"]:hover {
+  border-color: color-mix(in srgb, var(--text) 52%, transparent);
+}
+input[type="checkbox"]:checked,
+input[type="checkbox"]:indeterminate {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 11px 11px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-6.5'/%3E%3C/svg%3E");
+}
+/* A dash, for the tri-state boxes used by bulk selection. */
+input[type="checkbox"]:indeterminate::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 10px 10px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M4 8h8'/%3E%3C/svg%3E");
+}
+input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+input[type="checkbox"]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* The checkbox sets its own box, so the `accent-color` rules it used to rely on
+   are redundant here. */
+.remember-row input:checked,
+.setting-toggle input:checked {
+  accent-color: var(--accent);
+}
+
+/* The very first cover is not replacing anything, so it should be painted at
+   full opacity the moment it is decoded rather than fading in over the bare
+   surface. The host only marks the node cross-fading when there is a cover
+   underneath it. */
+.fullscreen-art--in:only-child {
+  animation: none;
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+   Custom select
+
+   Replaces the native `<select>` popup, which the platform draws and the theme
+   cannot reach. The trigger echoes the closed control's look; the menu reuses
+   the app's menu surface so it matches the context menus.
+   --------------------------------------------------------------------------- */
+.custom-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--sidebar);
+  color: var(--text);
+  font-size: 11px;
+  cursor: default;
+}
+.custom-select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+.custom-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.custom-select:disabled {
+  opacity: 0.5;
+}
+.custom-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.custom-select > svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.custom-select-menu {
+  z-index: 60;
+  min-width: var(--radix-dropdown-menu-trigger-width);
+  max-height: min(320px, calc(100dvh - 24px));
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--sidebar);
+  box-shadow: 0 16px 40px #0007;
+  animation: context-pop 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.custom-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 6px 9px;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+.custom-select-option[data-highlighted] {
+  color: #fff;
+  background: var(--accent);
+}
+.custom-select-check {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 14px;
+  color: currentColor;
 }

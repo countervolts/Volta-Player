@@ -286,7 +286,11 @@ export function Connect({
               onDismiss={onDismissDiagnosis}
             />
           )}
-          <button className="primary-button connect-submit" disabled={busy}>
+          <button
+            className="primary-button connect-submit"
+            type="submit"
+            disabled={busy}
+          >
           {busy ? (
             <>
               <LoaderCircle className="spin" size={17} />
@@ -303,6 +307,7 @@ export function Connect({
                 <div className="saved-account" key={accountKey(account)}>
                   <button
                     className="saved-account-use"
+                    type="button"
                     disabled={busy}
                     onClick={() => onUseAccount(account)}
                   >

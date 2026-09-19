@@ -49,6 +49,7 @@ import { clearListeningHistory, type ListeningEvent } from "../lib/listening-his
 import type { Player } from "../lib/use-player";
 import type { ShortcutId } from "../shortcuts";
 import type { SettingsFocus } from "./app-model";
+import { Select } from "./custom-select";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
 
@@ -271,6 +272,10 @@ export function SettingsView({
       : "appearance",
   );
 
+  // The modifier for the larger volume-scroll step. Ctrl+wheel belongs to the
+  // browser's page zoom, so the app uses Shift.
+  const largeStepModifier = "Shift";
+
   const highlightTimer = useRef<number>();
   // Scroll a section into view and flash it. Shared by the routed deep links
   // (?focus=...) and by the in-page "Tune engine" button. The double frame
@@ -380,16 +385,17 @@ export function SettingsView({
                             <b>Theme</b>
                             <small>Choose the color scheme</small>
                           </span>
-                          <select
-                            aria-label="Theme"
+                          <Select
+                            label="Theme"
                             value={theme}
-                            onChange={(event) => setTheme(event.target.value)}
-                          >
-                            <option value="system">Match system</option>
-                            <option value="dark">Dark</option>
-                            <option value="light">Light</option>
-                            <option value="high-contrast">High contrast</option>
-                          </select>
+                            onChange={(value) => setTheme(value as typeof theme)}
+                            options={[
+                              { value: "system", label: "Match system" },
+                              { value: "dark", label: "Dark" },
+                              { value: "light", label: "Light" },
+                              { value: "high-contrast", label: "High contrast" },
+                            ]}
+                          />
                         </label>
                         <div className="setting-row setting-toggle">
                           <SettingIcon tone="indigo">
@@ -440,8 +446,8 @@ export function SettingsView({
                             <b>Animated artwork</b>
                             <small>Choose where animated artwork is allowed to play</small>
                           </span>
-                          <select
-                            aria-label="Animated artwork"
+                          <Select
+                            label="Animated artwork"
                             value={
                               !animatedArtwork
                                 ? "off"
@@ -449,16 +455,16 @@ export function SettingsView({
                                   ? "everywhere"
                                   : "prominent"
                             }
-                            onChange={(event) => {
-                              const mode = event.target.value;
+                            onChange={(mode) => {
                               setAnimatedArtwork(mode !== "off");
                               setAnimateArtworkEverywhere(mode === "everywhere");
                             }}
-                          >
-                            <option value="prominent">Album and player views</option>
-                            <option value="everywhere">Everywhere</option>
-                            <option value="off">Off</option>
-                          </select>
+                            options={[
+                              { value: "prominent", label: "Album and player views" },
+                              { value: "everywhere", label: "Everywhere" },
+                              { value: "off", label: "Off" },
+                            ]}
+                          />
                         </label>
                         <label className="setting-row setting-toggle">
                           <SettingIcon tone="orange">
@@ -520,16 +526,17 @@ export function SettingsView({
                               Original sends the source file to your browser
                             </small>
                           </span>
-                          <select
-                            aria-label="Streaming quality"
+                          <Select
+                            label="Streaming quality"
                             value={player.original ? "original" : "compatible"}
-                            onChange={(event) =>
-                              player.setOriginal(event.target.value === "original")
+                            onChange={(value) =>
+                              player.setOriginal(value === "original")
                             }
-                          >
-                            <option value="original">Original · no transcoding</option>
-                            <option value="compatible">Compatible · MP3 320 kbps</option>
-                          </select>
+                            options={[
+                              { value: "original", label: "Original · no transcoding" },
+                              { value: "compatible", label: "Compatible · MP3 320 kbps" },
+                            ]}
+                          />
                         </label>
                         <div className="setting-row setting-toggle">
                           <SettingIcon tone="pink">
@@ -585,16 +592,17 @@ export function SettingsView({
                             <b>Infinite Play source</b>
                             <small>Use your recommendations or choose songs randomly</small>
                           </span>
-                          <select
-                            aria-label="Infinite Play source"
+                          <Select
+                            label="Infinite Play source"
                             value={infinitePlayMode}
-                            onChange={(event) =>
-                              setInfinitePlayMode(event.target.value as InfinitePlayMode)
+                            onChange={(value) =>
+                              setInfinitePlayMode(value as InfinitePlayMode)
                             }
-                          >
-                            <option value="algorithm">Algorithm suggestions</option>
-                            <option value="random">Random songs</option>
-                          </select>
+                            options={[
+                              { value: "algorithm", label: "Algorithm suggestions" },
+                              { value: "random", label: "Random songs" },
+                            ]}
+                          />
                         </div>
                         <label className="setting-row setting-toggle">
                           <SettingIcon tone="orange">
@@ -623,22 +631,23 @@ export function SettingsView({
                               length. Off keeps the gapless handoff.
                             </small>
                           </span>
-                          <select
-                            aria-label="Song transitions"
+                          <Select
+                            label="Song transitions"
                             value={transitionMode}
-                            onChange={(event) => {
-                              const mode = event.target.value as TransitionMode;
+                            onChange={(value) => {
+                              const mode = value as TransitionMode;
                               // Crossfade needs a usable length. Seeding one on
                               // selection beats leaving the stepper at zero.
                               if (mode === "crossfade" && !crossfadeSeconds)
                                 setCrossfadeSeconds(6);
                               setTransitionMode(mode);
                             }}
-                          >
-                            <option value="automix">AutoMix</option>
-                            <option value="crossfade">Crossfade</option>
-                            <option value="off">Off</option>
-                          </select>
+                            options={[
+                              { value: "automix", label: "AutoMix" },
+                              { value: "crossfade", label: "Crossfade" },
+                              { value: "off", label: "Off" },
+                            ]}
+                          />
                         </div>
                         {transitionMode === "crossfade" && (
                           <div className="setting-row setting-toggle">
@@ -717,13 +726,19 @@ export function SettingsView({
                             <Volume2 size={16} />
                           </SettingIcon>
                           <span className="setting-copy">
-                            <b>Shift + scroll step</b>
-                            <small>Change the volume by this percentage while holding Shift</small>
+                            <b>{largeStepModifier} + scroll step</b>
+                            <small>
+                              Change the volume by this percentage while holding{" "}
+                              {largeStepModifier}
+                            </small>
                           </span>
-                          <span className="setting-stepper" aria-label="Shift scroll step">
+                          <span
+                            className="setting-stepper"
+                            aria-label={`${largeStepModifier} scroll step`}
+                          >
                             <button
                               type="button"
-                              aria-label="Decrease Shift scroll step"
+                              aria-label={`Decrease ${largeStepModifier} scroll step`}
                               onClick={() =>
                                 setVolumeShiftScrollStep((value) => Math.max(1, value - 1))
                               }
@@ -733,7 +748,7 @@ export function SettingsView({
                             <output>{volumeShiftScrollStep}%</output>
                             <button
                               type="button"
-                              aria-label="Increase Shift scroll step"
+                              aria-label={`Increase ${largeStepModifier} scroll step`}
                               onClick={() =>
                                 setVolumeShiftScrollStep((value) => Math.min(10, value + 1))
                               }
@@ -753,19 +768,18 @@ export function SettingsView({
                               Requires a server that exposes them.
                             </small>
                           </span>
-                          <select
-                            aria-label="Loudness normalization"
+                          <Select
+                            label="Loudness normalization"
                             value={normalization}
-                            onChange={(event) =>
-                              setNormalization(
-                                event.target.value as "off" | "track" | "album",
-                              )
+                            onChange={(value) =>
+                              setNormalization(value as "off" | "track" | "album")
                             }
-                          >
-                            <option value="off">Off</option>
-                            <option value="track">Track gain</option>
-                            <option value="album">Album gain</option>
-                          </select>
+                            options={[
+                              { value: "off", label: "Off" },
+                              { value: "track", label: "Track gain" },
+                              { value: "album", label: "Album gain" },
+                            ]}
+                          />
                         </div>
                         <label className="setting-row setting-toggle">
                           <SettingIcon tone="blue">
@@ -1002,16 +1016,17 @@ export function SettingsView({
                               Apple Music looks up a matching catalog link. Spotify shares a direct provider search link.
                             </small>
                           </span>
-                          <select
-                            aria-label="Share destination"
+                          <Select
+                            label="Share destination"
                             value={shareProvider}
-                            onChange={(event) =>
-                              setShareProvider(event.target.value as ShareProvider)
+                            onChange={(value) =>
+                              setShareProvider(value as ShareProvider)
                             }
-                          >
-                            <option value="apple-music">Apple Music</option>
-                            <option value="spotify">Spotify</option>
-                          </select>
+                            options={[
+                              { value: "apple-music", label: "Apple Music" },
+                              { value: "spotify", label: "Spotify" },
+                            ]}
+                          />
                         </label>
                       </div>
                       <p className="settings-section-footer">

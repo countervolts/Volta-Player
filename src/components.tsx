@@ -44,9 +44,8 @@ import {
   type Song,
 } from "./lib/navidrome";
 import {
-  discardArtworkStill,
+  artworkIsAnimated,
   discardArtworkStillCanvas,
-  loadArtworkStill,
   loadArtworkStillCanvas,
 } from "./lib/artwork";
 
@@ -619,7 +618,6 @@ const StandardArtwork = memo(function StandardArtwork({
   const original = imageUrl || client.cover(id);
   const resized = imageUrl || client.cover(id, size);
   const [kind, setKind] = useState<"animated" | "static" | undefined>(original ? undefined : "static");
-  const [frozen, setFrozen] = useState("");
   const [canvasStill, setCanvasStill] = useState<HTMLCanvasElement | null>(null);
   const [near, setNear] = useState(eager || loadEager);
   const artworkRef = useRef<HTMLDivElement>(null);
@@ -637,46 +635,52 @@ const StandardArtwork = memo(function StandardArtwork({
     // A keyed card can be reused as Home and New in Your Library swap their
     // overlapping albums. Ignore a completion belonging to the old URL.
     if (artworkSourceRef.current !== resized) return undefined;
-    const animated = /image\/(gif|apng|webp)/i.test(type);
-    setKind(animated ? "animated" : "static");
-    if (animated && blob && !animate && resized) {
-      return loadArtworkStill(resized, blob)
-        .then((frame) => {
-          if (artworkSourceRef.current !== resized || !activeRef.current) {
-            discardArtworkStill(resized);
-            return null;
-          }
-          setFrozen(frame);
-          return frame;
-        })
-        .catch(() => {
-          // Firefox RFP poisons pixel readback, so use a displayed canvas
-          // instead of a data URL. This keeps the setting static without
-          // reading the canvas back. The helper captures frame 2.
-          return loadArtworkStillCanvas(resized, blob)
-            .then((canvas) => {
-              if (artworkSourceRef.current !== resized || !activeRef.current) {
-                discardArtworkStillCanvas(resized);
-                return null;
-              }
-              setCanvasStill(canvas);
-              return null;
-            })
-            .catch(() => {
-              if (artworkSourceRef.current === resized) setKind("static");
-              return undefined;
-            });
-        });
+    if (!blob || !resized) return undefined;
+    // Static PNG/JPEG (and any container that cannot animate) keeps the
+    // original bytes and goes straight to <img>.
+    if (!/image\/(gif|apng|webp)/i.test(type)) {
+      setKind("static");
+      return undefined;
     }
-    return undefined;
+    return artworkIsAnimated(blob)
+      .then((animated) => {
+        if (artworkSourceRef.current !== resized) return undefined;
+        if (!animated) {
+          setKind("static");
+          return undefined;
+        }
+        setKind("animated");
+        // Animation is allowed here, so the original animated source is shown.
+        if (animate || !activeRef.current) return undefined;
+        // Animation must be frozen: paint one decoded frame into a canvas and
+        // display that canvas. Pixels are never read back out of it, which is
+        // what keeps this working under Firefox resistFingerprinting.
+        return loadArtworkStillCanvas(resized, blob)
+          .then((canvas) => {
+            if (artworkSourceRef.current !== resized || !activeRef.current) {
+              discardArtworkStillCanvas(resized);
+              return undefined;
+            }
+            setCanvasStill(canvas);
+            return undefined;
+          })
+          .catch(() => {
+            // Keeping the original animated source is better than a blank card.
+            return undefined;
+          });
+      })
+      .catch(() => {
+        if (artworkSourceRef.current === resized) setKind("static");
+        return undefined;
+      });
   }, [animate, resized]);
   useEffect(() => {
     if (!active || animate || kind !== "animated" || !resized) return;
     let cancelled = false;
-    void loadArtworkStill(resized)
-      .then((frame) => {
-        if (!cancelled && activeRef.current) setFrozen(frame);
-        else discardArtworkStill(resized);
+    void loadArtworkStillCanvas(resized)
+      .then((canvas) => {
+        if (!cancelled && activeRef.current) setCanvasStill(canvas);
+        else discardArtworkStillCanvas(resized);
       })
       .catch(() => {
         if (!cancelled) setKind("static");
@@ -686,11 +690,6 @@ const StandardArtwork = memo(function StandardArtwork({
     };
   }, [active, animate, kind, resized]);
   useEffect(() => {
-    if (active || !frozen || !resized) return;
-    discardArtworkStill(resized);
-    setFrozen("");
-  }, [active, frozen, resized]);
-  useEffect(() => {
     if (active || !canvasStill || !resized) return;
     discardArtworkStillCanvas(resized);
     setCanvasStill(null);
@@ -698,10 +697,15 @@ const StandardArtwork = memo(function StandardArtwork({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvasStill || !canvas) return;
+    // The bitmap is the frozen frame's own pixel grid; CSS does the sizing.
     canvas.width = canvasStill.width;
     canvas.height = canvasStill.height;
     const context = canvas.getContext("2d");
-    if (context) context.drawImage(canvasStill, 0, 0);
+    if (!context) return;
+    // Clear first so a reused element can never show the previous frame while
+    // the replacement is being painted.
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(canvasStill, 0, 0);
   }, [canvasStill]);
   useEffect(() => {
     setNear(eager || loadEager);
@@ -723,18 +727,19 @@ const StandardArtwork = memo(function StandardArtwork({
   }, [eager, id, imageUrl, loadEager]);
   useEffect(() => {
     setKind(original ? undefined : "static");
-    setFrozen("");
     setCanvasStill(null);
   }, [original, resized]);
   // Grid: frozen frame only. Prominent views: original animation.
-  // Keep loaded artwork visible while frame 2 is being extracted.
-  // Swap to static frame only after extraction succeeds.
-  const src = animate ? original : kind === "animated" ? frozen || resized : resized;
+  // Keep the loaded artwork visible while the frame is being extracted, and
+  // swap to the frozen canvas only after extraction succeeds.
+  const src = animate || kind === "static" ? resized : canvasStill ? "" : resized;
   return <div ref={artworkRef} data-artwork-id={id || imageUrl || ""} className={`artwork ${className}`}>
-    {animate || !canvasStill ? (
-      src ? <ArtworkImage key={src} src={src} alt={label} eager={eager || loadEager} active={active} discardAnimated={!animate} onType={handleArtworkType} /> : <Music2 aria-hidden="true" />
-    ) : (
+    {canvasStill ? (
       <canvas ref={canvasRef} aria-label={label} role={label ? "img" : undefined} />
+    ) : src ? (
+      <ArtworkImage key={src} src={src} alt={label} eager={eager || loadEager} active={active} discardAnimated={!animate} onType={handleArtworkType} />
+    ) : (
+      <Music2 aria-hidden="true" />
     )}
   </div>;
 });
@@ -777,6 +782,8 @@ export function Modal({
   children,
   className = "",
   hideTitle = false,
+  closeLabel = "Close",
+  closeIcon,
 }: {
   open: boolean;
   onClose: () => void;
@@ -784,6 +791,8 @@ export function Modal({
   children: ReactNode;
   className?: string;
   hideTitle?: boolean;
+  closeLabel?: string;
+  closeIcon?: ReactNode;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={(value) => !value && onClose()}>
@@ -798,8 +807,8 @@ export function Modal({
               {title}
             </Dialog.Title>
             <Dialog.Close asChild>
-              <IconButton label="Close">
-                <X size={18} />
+              <IconButton label={closeLabel}>
+                {closeIcon || <X size={18} />}
               </IconButton>
             </Dialog.Close>
           </div>

@@ -195,6 +195,7 @@ import { LibrarySidebar } from "./app/library-sidebar";
 import { SettingsView } from "./app/settings-view";
 import { PerformanceOverlay } from "./app/performance-overlay";
 import { AppDialogs } from "./app/app-dialogs";
+import { Select } from "./app/custom-select";
 import {
   accountKey,
   clampInterfaceScale,
@@ -1549,7 +1550,10 @@ export default function App() {
 
   useEffect(() => {
     const generation = ++localMusicGeneration.current;
-    void restoreLocalMusicDirectory()
+    // The remembered folder is a stored directory handle whose permission has
+    // to be re-checked on each load.
+    const restore = restoreLocalMusicDirectory();
+    void restore
       .then((library) => {
         if (generation === localMusicGeneration.current && library) {
           restoredLocalDirectory.current = true;
@@ -2245,7 +2249,7 @@ export default function App() {
   const connect = async (
     credentials: Credentials,
     rememberMe = false,
-    optimistic = false,
+    restoring = false,
   ) => {
     setConnecting(true);
     setConnectionError("");
@@ -2257,7 +2261,10 @@ export default function App() {
       for (const candidate of candidates) {
         try {
           const next = new Navidrome({ ...credentials, server: candidate });
-          if (!optimistic) await next.ping();
+          // Restored credentials must be validated just like a manual sign-in.
+          // Skipping ping let expired tokens enter the library and made session
+          // restoration look successful until the first data request failed.
+          await next.ping();
           service = next;
           break;
         } catch (error) {
@@ -2341,6 +2348,13 @@ export default function App() {
           notify("Playlists could not be loaded. Open Playlists to retry."),
         );
     } catch (error) {
+      if (restoring) {
+        // A persisted token can expire while the app is closed. Clear only the
+        // failed automatic restore; manual sign-in errors must preserve the
+        // user's draft and checkbox choice for another attempt.
+        if (remembered) safeRemove(localStorage, REMEMBERED_CREDENTIALS_KEY);
+        safeRemove(sessionStorage, SESSION_CREDENTIALS_KEY);
+      }
       if (error instanceof TypeError) {
         // Distinguish a blocked origin from an unreachable host so the user
         // gets the fix that actually applies to their setup.
@@ -3655,7 +3669,13 @@ export default function App() {
         target.closest(
           'input, textarea, select, button, [contenteditable="true"]',
         ) &&
-        !shortcuts[shortcut.id].mod
+        !shortcuts[shortcut.id].mod &&
+        // Play/pause is exempt. Space and Enter both "click" a focused
+        // control, so after using any button, Space would re-trigger that
+        // button instead of pausing. Transport control is the stronger
+        // expectation for a music player, and nothing types a literal space
+        // into a button, so suppressing the guard here is safe.
+        shortcut.id !== "playPause"
       )
         return;
       event.preventDefault();
@@ -4633,6 +4653,7 @@ export default function App() {
     );
   if (!client)
     return (
+      <>
       <Connect
         onConnect={connect}
         busy={connecting}
@@ -4660,6 +4681,7 @@ export default function App() {
         onImportLocalMusic={importMusicFolder}
         onOpenLocalMusic={openLocalLibrary}
       />
+      </>
     );
   const songTable = (
     songs: Song[],
@@ -4916,7 +4938,12 @@ export default function App() {
       />
 
       <div className="workspace">
-        <header className={"window-toolbar" + (["search", "genre"].includes(route.page) ? " search-toolbar" : "")}>
+        <header
+          className={
+            "window-toolbar" +
+            (["search", "genre"].includes(route.page) ? " search-toolbar" : "")
+          }
+        >
           <div className="toolbar-leading">
             <IconButton
               label="Toggle navigation"
@@ -4924,8 +4951,7 @@ export default function App() {
                 if (compactLayout) setMobileSidebar(!mobileSidebar);
                 else setSidebarCollapsed(!sidebarCollapsed);
               }}
-            >
-              {compactLayout ? (
+            >              {compactLayout ? (
                 <PanelLeft size={18} />
               ) : sidebarCollapsed ? (
                 <PanelLeftOpen size={18} />
@@ -5028,46 +5054,49 @@ export default function App() {
                   {route.page === "albums" && (
                     <label className="sort-control">
                       <ArrowDownWideNarrow size={16} />
-                      <select
-                        aria-label="Sort albums"
+                      <Select
+                        label="Sort albums"
                         value={sort}
-                        onChange={(event) => setSort(event.target.value)}
-                      >
-                        <option value="alphabeticalByName">Album</option>
-                        <option value="alphabeticalByArtist">Artist</option>
-                        <option value="newest">Recently Added</option>
-                        <option value="frequent">Most Played</option>
-                      </select>
+                        onChange={setSort}
+                        options={[
+                          { value: "alphabeticalByName", label: "Album" },
+                          { value: "alphabeticalByArtist", label: "Artist" },
+                          { value: "newest", label: "Recently Added" },
+                          { value: "frequent", label: "Most Played" },
+                        ]}
+                      />
                     </label>
                   )}
                   {(route.page === "songs" ||
                     (route.page === "favorites" && favoritesTab === "songs")) && (
                     <label className="sort-control">
                       <ArrowDownWideNarrow size={16} />
-                      <select
-                        aria-label="Sort songs"
+                      <Select
+                        label="Sort songs"
                         value={songSort}
-                        onChange={(event) => setSongSort(event.target.value)}
-                      >
-                        <option value="default">Default order</option>
-                        <option value="title">Title</option>
-                        <option value="artist">Artist</option>
-                        <option value="album">Album</option>
-                      </select>
+                        onChange={setSongSort}
+                        options={[
+                          { value: "default", label: "Default order" },
+                          { value: "title", label: "Title" },
+                          { value: "artist", label: "Artist" },
+                          { value: "album", label: "Album" },
+                        ]}
+                      />
                     </label>
                   )}
                   {(route.page === "artists" ||
                     (route.page === "favorites" && favoritesTab === "artists")) && (
                     <label className="sort-control">
                       <ArrowDownWideNarrow size={16} />
-                      <select
-                        aria-label="Sort artists"
+                      <Select
+                        label="Sort artists"
                         value={artistSort}
-                        onChange={(event) => setArtistSort(event.target.value)}
-                      >
-                        <option value="name">Name</option>
-                        <option value="albums">Most albums</option>
-                      </select>
+                        onChange={setArtistSort}
+                        options={[
+                          { value: "name", label: "Name" },
+                          { value: "albums", label: "Most albums" },
+                        ]}
+                      />
                     </label>
                   )}
                   {route.page === "playlists" && sourceMode === "navidrome" && (
