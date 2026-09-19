@@ -204,12 +204,16 @@ const stillCanvasCache = new Map<string, HTMLCanvasElement>();
 const stillCanvasPending = new Map<string, Promise<HTMLCanvasElement>>();
 const MAX_STILL_CANVAS_ENTRIES = 96;
 
-/** Drop a cached frozen frame and release its backing store immediately. */
+/**
+ * Drop a cached frozen frame.
+ *
+ * The canvas is only unlinked, never resized to zero: entries are keyed by src,
+ * so another mounted card can be holding the same canvas as the source it draws
+ * from, and zeroing it would blank that card. An unlinked canvas with no
+ * remaining references is collected by the GC.
+ */
 export function discardArtworkStillCanvas(src: string) {
-  const canvas = stillCanvasCache.get(src);
-  if (!canvas) return;
   stillCanvasCache.delete(src);
-  canvas.width = canvas.height = 0;
 }
 
 /**
