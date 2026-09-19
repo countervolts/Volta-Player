@@ -271,6 +271,7 @@ export function LibrarySidebar({
           Join the Discord <span aria-hidden="true">↗</span>
         </a>
       </Tooltip>
+      {/* The stable/beta switch points at a different web origin. */}
       <Tooltip label="Sign in again on the other channel">
         <a
           className="version-switch-link"

@@ -23,6 +23,7 @@ import {
   Star,
 } from "lucide-react";
 import { Artwork, EmptyState, IconButton, Tooltip } from "../components";
+import { Select } from "./custom-select";
 import {
   duration,
   isLossless,
@@ -292,16 +293,17 @@ export function FolderView({
       </div>
       <label className="finder-sort">
         <span className="visually-hidden">Sort folders by</span>
-        <select
-          aria-label="Sort folders by"
+        <Select
+          label="Sort folders by"
           value={sort}
-          onChange={(event) => setSort(event.target.value as SortMode)}
-        >
-          <option value="name">Name</option>
-          <option value="kind">Kind</option>
-          <option value="size">Size</option>
-          <option value="date">Date Modified</option>
-        </select>
+          onChange={(value) => setSort(value as SortMode)}
+          options={[
+            { value: "name", label: "Name" },
+            { value: "kind", label: "Kind" },
+            { value: "size", label: "Size" },
+            { value: "date", label: "Date Modified" },
+          ]}
+        />
       </label>
       <label className="finder-search">
         <Search size={14} />

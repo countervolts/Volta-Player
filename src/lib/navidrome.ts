@@ -7,6 +7,7 @@ import {
   type StructuredLyrics,
 } from "./lyrics";
 import type { TrackAnalysis } from "./audio-analysis";
+import { localFileUrl } from "./local-file-registry";
 
 export type Song = {
   id: string;
@@ -840,7 +841,11 @@ export class Navidrome {
   }
 
   stream(song: Song, original: boolean): string {
-    if (song.source === "local" && song.localUrl) return song.localUrl;
+    if (song.source === "local") {
+      // Resolved on demand so a scan does not mint a blob URL per track.
+      const url = song.localUrl || localFileUrl(song.localPath);
+      if (url) return url;
+    }
     return this.url("stream", {
       id: song.id,
       format: original ? "raw" : "mp3",

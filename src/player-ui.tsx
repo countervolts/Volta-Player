@@ -23,6 +23,7 @@ import {
   Repeat,
   Repeat1,
   Shuffle,
+  ChevronLeft,
   SkipBack,
   SkipForward,
   Star,
@@ -83,6 +84,18 @@ export function MixingIndicator({ label }: { label: string }) {
   );
 }
 
+/**
+ * Whether this wheel event asks for the larger volume step.
+ *
+ * Shift, because Ctrl+wheel belongs to the browser's page zoom.
+ */
+export function isVolumeLargeStep(event: {
+  shiftKey: boolean;
+  ctrlKey: boolean;
+}): boolean {
+  return event.shiftKey;
+}
+
 function adjustVolumeFromWheel(
   event: ReactWheelEvent<HTMLDivElement>,
   player: Player,
@@ -92,7 +105,9 @@ function adjustVolumeFromWheel(
   if (!event.deltaY) return;
   event.preventDefault();
   event.stopPropagation();
-  const stepSize = event.shiftKey ? volumeShiftScrollStep : volumeScrollStep;
+  const stepSize = isVolumeLargeStep(event)
+    ? volumeShiftScrollStep
+    : volumeScrollStep;
   const step = (event.deltaY < 0 ? 1 : -1) * stepSize / 100;
   player.setVolume(Math.round((player.volume + step) * 100) / 100);
 }
@@ -1199,7 +1214,13 @@ export function FullscreenBackground({
   // cover endpoint the big record already uses, so the decode is shared.
   const source = artworkUrl || client.cover(artworkReference, 900);
   // The cover that is painted, and the one it is replacing.
-  const [painted, setPainted] = useState(source);
+  //
+  // `painted` starts empty rather than at `source`. The layers fade in with a
+  // CSS animation, so committing the cover before it has decoded paints a
+  // frame with nothing in it: the blurred mesh shows the bare surface, which
+  // reads as a dull grey backdrop that then snaps to the real colours. Waiting
+  // for the decode before the first paint removes that flash.
+  const [painted, setPainted] = useState<string>();
   const [outgoing, setOutgoing] = useState<string>();
   const background = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1218,6 +1239,8 @@ export function FullscreenBackground({
       .catch(() => {})
       .then(() => {
         if (cancelled) return;
+        // Only cross-fade between two covers; the first one is not replacing
+        // anything, so it should appear rather than fade over empty space.
         setOutgoing(painted);
         setPainted(source);
       });
@@ -1422,6 +1445,11 @@ export function FullPlayer({
       onClose={onClose}
       title="Now Playing"
       hideTitle
+      // Keep the shared dialog's accessible name stable for keyboard users and
+      // existing automation; the left arrow communicates that this closes the
+      // full-player view back to the library.
+      closeLabel="Close"
+      closeIcon={<ChevronLeft size={22} />}
       className="fullscreen-dialog"
     >
       <FullscreenBackground
