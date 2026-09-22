@@ -12,8 +12,10 @@ import {
   AudioLines,
   Blend,
   Brain,
+  ChevronDown,
   CircleUserRound,
   ClipboardCopy,
+  Database,
   Eye,
   FileText,
   FlaskConical,
@@ -33,6 +35,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   TriangleAlert,
+  Trash2,
   Volume2,
 } from "lucide-react";
 import type { Credentials } from "../lib/navidrome";
@@ -50,6 +53,12 @@ import type { Player } from "../lib/use-player";
 import type { ShortcutId } from "../shortcuts";
 import type { SettingsFocus } from "./app-model";
 import { Select } from "./custom-select";
+import {
+  clearVoltaCaches,
+  formatStorageBytes,
+  readStorageMetrics,
+  type StorageMetrics,
+} from "../lib/cache-management";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
 
@@ -271,6 +280,49 @@ export function SettingsView({
       ? "privacy"
       : "appearance",
   );
+  const [storageMetrics, setStorageMetrics] = useState<StorageMetrics>();
+  const [storageMetricsLoaded, setStorageMetricsLoaded] = useState(false);
+  const [storageMetricsLoading, setStorageMetricsLoading] = useState(false);
+  const [clearingCaches, setClearingCaches] = useState(false);
+  const storageSummary = storageMetrics?.usedBytes === undefined
+    ? storageMetricsLoading
+      ? "Measuring browser storage…"
+      : "Storage estimate unavailable"
+    : `${formatStorageBytes(storageMetrics.usedBytes)}${
+        storageMetrics.quotaBytes === undefined
+          ? ""
+          : ` of ${formatStorageBytes(storageMetrics.quotaBytes)}`
+      } used`;
+
+  const refreshStorageMetrics = useCallback(async () => {
+    setStorageMetricsLoading(true);
+    try {
+      setStorageMetrics(await readStorageMetrics());
+    } catch {
+      setStorageMetrics(undefined);
+    } finally {
+      setStorageMetricsLoaded(true);
+      setStorageMetricsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "privacy" && !storageMetricsLoaded && !storageMetricsLoading)
+      void refreshStorageMetrics();
+  }, [activeTab, refreshStorageMetrics, storageMetricsLoaded, storageMetricsLoading]);
+
+  const clearCaches = useCallback(async () => {
+    setClearingCaches(true);
+    try {
+      await clearVoltaCaches();
+      await refreshStorageMetrics();
+      notify("Volta caches cleared.");
+    } catch {
+      notify("Some caches could not be cleared.");
+    } finally {
+      setClearingCaches(false);
+    }
+  }, [notify, refreshStorageMetrics]);
 
   // The modifier for the larger volume-scroll step. Ctrl+wheel belongs to the
   // browser's page zoom, so the app uses Shift.
@@ -909,6 +961,84 @@ export function SettingsView({
                             </button>
                           </div>
                         </div>
+                        <section
+                          className="setting-row storage-cache-panel"
+                          aria-labelledby="storage-cache-title"
+                        >
+                          <div className="storage-cache-main">
+                            <SettingIcon tone="teal">
+                              <Database size={16} />
+                            </SettingIcon>
+                            <div className="storage-cache-copy">
+                              <b id="storage-cache-title">Storage and caches</b>
+                              <small aria-live="polite">{storageSummary}</small>
+                            </div>
+                            <div className="storage-cache-actions">
+                              <button
+                                className="secondary-button"
+                                type="button"
+                                disabled={clearingCaches}
+                                onClick={() => void clearCaches()}
+                              >
+                                <Trash2 size={14} />
+                                {clearingCaches ? "Clearing…" : "Clear caches"}
+                              </button>
+                              <button
+                                className="secondary-button storage-cache-refresh"
+                                type="button"
+                                disabled={storageMetricsLoading}
+                                aria-label="Refresh storage metrics"
+                                title="Refresh storage metrics"
+                                onClick={() => void refreshStorageMetrics()}
+                              >
+                                <RefreshCw size={14} />
+                              </button>
+                            </div>
+                          </div>
+                          <details className="storage-cache-details">
+                            <summary>
+                              <span>Storage breakdown</span>
+                              <ChevronDown size={13} aria-hidden="true" />
+                            </summary>
+                            {storageMetrics ? (
+                              <dl className="storage-cache-breakdown">
+                                <div>
+                                  <dt>Settings data</dt>
+                                  <dd>{formatStorageBytes(storageMetrics.localStorageBytes)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Session data</dt>
+                                  <dd>{formatStorageBytes(storageMetrics.sessionStorageBytes)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Local library</dt>
+                                  <dd>
+                                    <span>{formatStorageBytes(storageMetrics.localLibrary.bytes)}</span>
+                                    <small>
+                                      {storageMetrics.localLibrary.metadataEntries} metadata ·{" "}
+                                      {storageMetrics.localLibrary.artworkEntries} artwork
+                                    </small>
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>App cache</dt>
+                                  <dd>{storageMetrics.appShellEntries.toLocaleString()} resources</dd>
+                                </div>
+                              </dl>
+                            ) : (
+                              <p className="storage-cache-note">
+                                {storageMetricsLoading
+                                  ? "Measuring storage…"
+                                  : "Storage details are unavailable in this browser."}
+                              </p>
+                            )}
+                            <p className="storage-cache-note">
+                              Clearing removes artwork, library scan data,
+                              AutoMix analyses, lyrics lookups, and app resources.
+                              Preferences and your saved music folder remain.
+                            </p>
+                          </details>
+                        </section>
                         <div className="setting-row setting-action-row">
                           <SettingIcon tone="pink">
                             <SlidersHorizontal size={16} />

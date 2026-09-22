@@ -19,12 +19,6 @@
 const ANIMATED_CONTAINER_TYPE = /image\/(gif|apng|webp)/i;
 /** Enough of the header to reach the animation marker in WebP and PNG. */
 const HEADER_BYTES = 4096;
-/**
- * Firefox has no `ImageDecoder`, so the fallback frame comes from an animated
- * `<img>`. Waiting briefly lets it advance past the first frame, which is what
- * the frozen still is supposed to capture.
- */
-const FRAME_ADVANCE_MS = 100;
 /** Longest edge of a frozen frame. Covers are downscaled to this at most. */
 const MAX_STILL_EDGE = 480;
 
@@ -47,7 +41,12 @@ type DecodedFrame = {
 /* Animation detection                                                        */
 /* -------------------------------------------------------------------------- */
 
-const animationCache = new WeakMap<Blob, Promise<boolean>>();
+let animationCache = new WeakMap<Blob, Promise<boolean>>();
+
+/** Forget animation decisions after the user asks to clear artwork caches. */
+export function clearArtworkDetectionCache() {
+  animationCache = new WeakMap<Blob, Promise<boolean>>();
+}
 
 /**
  * Walk RIFF-style chunks (`tag`, then payload) and report which tags were seen.
@@ -146,10 +145,10 @@ async function decodeFrame(blob: Blob, objectUrl: string): Promise<DecodedFrame>
     try {
       decoder = new decoderType({ data: blob, type: blob.type });
       await decoder.tracks.ready;
-      const frameCount = decoder.tracks.selectedTrack?.frameCount ?? 1;
-      // Frame 2 when there is one, so a frozen cover is not always frame 1.
-      const frameIndex = Math.min(1, Math.max(0, frameCount - 1));
-      const { image } = await decoder.decode({ frameIndex });
+      // Use the first frame. Some WebKit decoders fail when asked to advance
+      // an animated image to frame two, which can turn otherwise valid cover
+      // art into a broken image. Frame zero is the most widely supported path.
+      const { image } = await decoder.decode({ frameIndex: 0 });
       const live = decoder;
       return {
         source: image,
@@ -161,16 +160,24 @@ async function decodeFrame(blob: Blob, objectUrl: string): Promise<DecodedFrame>
         },
       };
     } catch {
-      decoder?.close();
+      try {
+        decoder?.close();
+      } catch {
+        // A decoder shutdown failure must not prevent the HTML image fallback.
+      }
       // Fall through to the <img> decoder below.
     }
   }
   // `HTMLImageElement` decodes every format the element supports, including
   // SVG artwork, and matches the path used elsewhere for cover decoding.
   const image = new Image();
-  image.src = objectUrl;
-  await image.decode();
-  await new Promise<void>((resolve) => window.setTimeout(resolve, FRAME_ADVANCE_MS));
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("Artwork image decode failed"));
+    image.src = objectUrl;
+  });
+  if (!image.naturalWidth || !image.naturalHeight)
+    throw new Error("Artwork frame unavailable");
   return {
     source: image,
     width: image.naturalWidth,
@@ -203,6 +210,14 @@ function drawFrameToCanvas(frame: DecodedFrame): HTMLCanvasElement {
 const stillCanvasCache = new Map<string, HTMLCanvasElement>();
 const stillCanvasPending = new Map<string, Promise<HTMLCanvasElement>>();
 const MAX_STILL_CANVAS_ENTRIES = 96;
+let stillCanvasEpoch = 0;
+
+/** Clear reusable frozen frames and prevent in-flight work from repopulating it. */
+export function clearArtworkStillCache() {
+  stillCanvasEpoch += 1;
+  stillCanvasCache.clear();
+  stillCanvasPending.clear();
+}
 
 /**
  * Drop a cached frozen frame.
@@ -231,6 +246,7 @@ export function loadArtworkStillCanvas(
   if (cached) return Promise.resolve(cached);
   const pending = stillCanvasPending.get(src);
   if (pending) return pending;
+  const epoch = stillCanvasEpoch;
   const request = (async () => {
     let blob: Blob;
     if (providedBlob) blob = providedBlob;
@@ -245,17 +261,21 @@ export function loadArtworkStillCanvas(
       frame = await decodeFrame(blob, objectUrl);
       if (!frame.width || !frame.height) throw new Error("Artwork frame unavailable");
       const canvas = drawFrameToCanvas(frame);
-      while (stillCanvasCache.size >= MAX_STILL_CANVAS_ENTRIES) {
-        const key = stillCanvasCache.keys().next().value!;
-        discardArtworkStillCanvas(key);
+      if (epoch === stillCanvasEpoch) {
+        while (stillCanvasCache.size >= MAX_STILL_CANVAS_ENTRIES) {
+          const key = stillCanvasCache.keys().next().value!;
+          discardArtworkStillCanvas(key);
+        }
+        stillCanvasCache.set(src, canvas);
       }
-      stillCanvasCache.set(src, canvas);
       return canvas;
     } finally {
       frame?.close();
       URL.revokeObjectURL(objectUrl);
     }
-  })().finally(() => stillCanvasPending.delete(src));
+  })().finally(() => {
+    if (stillCanvasPending.get(src) === request) stillCanvasPending.delete(src);
+  });
   stillCanvasPending.set(src, request);
   return request;
 }
