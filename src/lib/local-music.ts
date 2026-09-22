@@ -1089,6 +1089,70 @@ const openDatabase = (): Promise<IDBDatabase | null> =>
     request.onerror = () => reject(request.error);
   });
 
+export type LocalLibraryCacheMetrics = {
+  metadataEntries: number;
+  artworkEntries: number;
+  bytes: number;
+};
+
+/** Inspect only rebuildable scan/artwork stores; the saved folder handle stays intact. */
+export async function inspectLocalLibraryCaches(): Promise<LocalLibraryCacheMetrics> {
+  const metrics: LocalLibraryCacheMetrics = {
+    metadataEntries: 0,
+    artworkEntries: 0,
+    bytes: 0,
+  };
+  const database = await openDatabase();
+  if (!database) return metrics;
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(
+      [LOCAL_METADATA_STORE, LOCAL_ARTWORK_STORE],
+      "readonly",
+    );
+    const metadataCursor = transaction.objectStore(LOCAL_METADATA_STORE).openCursor();
+    metadataCursor.onsuccess = () => {
+      const cursor = metadataCursor.result;
+      if (!cursor) return;
+      metrics.metadataEntries += 1;
+      try {
+        metrics.bytes += JSON.stringify(cursor.value).length * 2;
+      } catch {
+        // The browser quota estimate below still includes non-JSON values.
+      }
+      cursor.continue();
+    };
+    const artworkCursor = transaction.objectStore(LOCAL_ARTWORK_STORE).openCursor();
+    artworkCursor.onsuccess = () => {
+      const cursor = artworkCursor.result;
+      if (!cursor) return;
+      const value = cursor.value as CachedFolderArtwork | undefined;
+      metrics.artworkEntries += 1;
+      metrics.bytes += value?.artwork?.size ?? 0;
+      metrics.bytes += (value?.source?.length ?? 0) * 2;
+      cursor.continue();
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  }).finally(() => database.close());
+  return metrics;
+}
+
+/** Clear rebuildable local library data without forgetting the chosen folder. */
+export async function clearLocalLibraryCaches(): Promise<void> {
+  const database = await openDatabase();
+  if (!database) return;
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(
+      [LOCAL_METADATA_STORE, LOCAL_ARTWORK_STORE],
+      "readwrite",
+    );
+    transaction.objectStore(LOCAL_METADATA_STORE).clear();
+    transaction.objectStore(LOCAL_ARTWORK_STORE).clear();
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  }).finally(() => database.close());
+}
+
 /**
  * Every cached entry, keyed by library path. Missing cache is not an error.
  */

@@ -163,6 +163,10 @@ const LRCLIB_ENDPOINT = "https://lrclib.net/api/get";
 const LRCLIB_SEARCH_ENDPOINT = "https://lrclib.net/api/search";
 const lrclibCache = new Map<string, Lyrics | null>();
 
+export function clearLyricsLookupCache() {
+  lrclibCache.clear();
+}
+
 const normalizeLrclibValue = (value: string) =>
   value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 

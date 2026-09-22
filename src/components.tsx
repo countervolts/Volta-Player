@@ -418,6 +418,7 @@ type SharedArtworkBlob = {
 };
 const sharedArtworkBlobs = new Map<string, SharedArtworkBlob>();
 let sharedArtworkBytes = 0;
+let sharedArtworkEpoch = 0;
 const MAX_SHARED_ARTWORK_BYTES = 32 * 1024 * 1024;
 
 function evictSharedArtwork() {
@@ -435,7 +436,7 @@ function evictSharedArtwork() {
 }
 
 function retainArtworkBlob(src: string, attempt: number): SharedArtworkBlob {
-  const key = `${src}|${attempt}`;
+  const key = `${src}|${attempt}|${sharedArtworkEpoch}`;
   const existing = sharedArtworkBlobs.get(key);
   if (existing) {
     existing.refs++;
@@ -497,6 +498,22 @@ function retainArtworkBlob(src: string, attempt: number): SharedArtworkBlob {
   return entry;
 }
 
+/** Drop reusable artwork blobs while allowing mounted images to finish safely. */
+export function clearArtworkLoadingCache() {
+  sharedArtworkEpoch += 1;
+  artworkPrefetches.forEach((controller) => controller.abort());
+  artworkPrefetches.clear();
+  artworkPrefetchSeen.clear();
+  sharedArtworkBlobs.forEach((entry, key) => {
+    entry.discardWhenReleased = true;
+    if (entry.refs > 0) return;
+    sharedArtworkBlobs.delete(key);
+    sharedArtworkBytes -= entry.bytes;
+    entry.blob = undefined;
+    if (entry.url) URL.revokeObjectURL(entry.url);
+  });
+}
+
 export function ArtworkMotionProvider({ enabled, everywhere, experimentalLoading, children }: {
   enabled: boolean; everywhere: boolean; children: ReactNode;
   experimentalLoading: boolean;
@@ -525,6 +542,7 @@ const ArtworkImage = memo(function ArtworkImage({
   active,
   discardAnimated,
   onType,
+  onExhausted,
 }: {
   src: string;
   alt: string;
@@ -532,12 +550,15 @@ const ArtworkImage = memo(function ArtworkImage({
   active: boolean;
   discardAnimated: boolean;
   onType: (type: string, blob?: Blob) => Promise<string | null | undefined> | string | null | undefined;
+  onExhausted: (blob?: Blob) => void;
 }) {
   const [attempt, setAttempt] = useState(0);
   const [resolvedSrc, setResolvedSrc] = useState(() => src.startsWith("data:") ? src : "");
+  const loadedBlob = useRef<Blob>();
   useEffect(() => {
     setAttempt(0);
     setResolvedSrc(src.startsWith("data:") ? src : "");
+    loadedBlob.current = undefined;
   }, [src]);
   useEffect(() => {
     if (!active && !src.startsWith("data:")) {
@@ -574,6 +595,7 @@ const ArtworkImage = memo(function ArtworkImage({
       .then(async (objectUrl) => {
         if (cancelled) return;
         if (!shared.blob) throw new Error("Artwork blob unavailable");
+        loadedBlob.current = shared.blob;
         if (discardAnimated && /image\/(gif|apng|webp)/i.test(shared.blob.type))
           shared.discardWhenReleased = true;
         const replacement = await onType(shared.blob.type, shared.blob);
@@ -603,7 +625,10 @@ const ArtworkImage = memo(function ArtworkImage({
       decoding="async"
       referrerPolicy="no-referrer"
       onError={() => {
-        if (attempt >= 3) return;
+        if (attempt >= 3) {
+          onExhausted(loadedBlob.current);
+          return;
+        }
         setAttempt((value) => Math.min(3, value + 1));
       }}
     />
@@ -674,6 +699,18 @@ const StandardArtwork = memo(function StandardArtwork({
         return undefined;
       });
   }, [animate, resized]);
+  const handleArtworkDecodeFailure = useCallback((blob?: Blob) => {
+    if (!blob || kind !== "animated" || !resized) return;
+    void loadArtworkStillCanvas(resized, blob)
+      .then((canvas) => {
+        if (artworkSourceRef.current !== resized || !activeRef.current) return;
+        setCanvasStill(canvas);
+        setKind("static");
+      })
+      .catch(() => {
+        // Keep the existing image surface if neither animation nor a still frame works.
+      });
+  }, [kind, resized]);
   useEffect(() => {
     if (!active || animate || kind !== "animated" || !resized) return;
     let cancelled = false;
@@ -737,7 +774,7 @@ const StandardArtwork = memo(function StandardArtwork({
     {canvasStill ? (
       <canvas ref={canvasRef} aria-label={label} role={label ? "img" : undefined} />
     ) : src ? (
-      <ArtworkImage key={src} src={src} alt={label} eager={eager || loadEager} active={active} discardAnimated={!animate} onType={handleArtworkType} />
+      <ArtworkImage key={src} src={src} alt={label} eager={eager || loadEager} active={active} discardAnimated={!animate} onType={handleArtworkType} onExhausted={handleArtworkDecodeFailure} />
     ) : (
       <Music2 aria-hidden="true" />
     )}
