@@ -311,10 +311,14 @@ export function Connect({
                     disabled={busy}
                     onClick={() => onUseAccount(account)}
                   >
-                    <CircleUserRound size={20} />
-                    <span>
+                    <span className="saved-account-icon" aria-hidden="true">
+                      <CircleUserRound size={19} />
+                    </span>
+                    <span className="saved-account-copy">
                       <b>{account.username}</b>
                       <small>
+                        <span className="saved-account-kind">Navidrome</span>
+                        <span aria-hidden="true"> · </span>
                         {account.server.replace(/^https?:\/\//, "")}
                       </small>
                     </span>
