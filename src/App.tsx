@@ -15,6 +15,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type RefObject,
   type CSSProperties,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -70,13 +72,16 @@ import {
   type Song,
 } from "./lib/navidrome";
 import {
+  applyLocalMetadataEdits,
   chooseLocalDirectory,
   clearLocalDirectoryHandle,
   localLibraryFromFileList,
   releaseLocalMusicLibrary,
   restoreLocalMusicDirectory,
   supportsDirectoryPicker,
+  writeLocalMetadataOverrides,
   type LocalMusicLibrary,
+  type LocalMetadataPatch,
 } from "./lib/local-music";
 import {
   usePlayer,
@@ -195,6 +200,11 @@ import { LibrarySidebar } from "./app/library-sidebar";
 import { SettingsView } from "./app/settings-view";
 import { PerformanceOverlay } from "./app/performance-overlay";
 import { AppDialogs } from "./app/app-dialogs";
+import {
+  createNotification,
+  type NotificationKind,
+  type NotificationNotice,
+} from "./app/notifications";
 import { Select } from "./app/custom-select";
 import {
   accountKey,
@@ -890,8 +900,12 @@ export default function App() {
   const [connectionState, setConnectionState] = useState<
     "online" | "offline" | "reconnecting"
   >(() => (navigator.onLine ? "online" : "offline"));
-  const [notice, setNotice] = useState("");
-  const notify = useCallback((message: string) => setNotice(message), []);
+  const [notice, setNotice] = useState<NotificationNotice | null>(null);
+  const notify = useCallback(
+    (message: string, kind: NotificationKind = "info") =>
+      setNotice(createNotification(message, kind)),
+    [],
+  );
   const activeClient = sourceMode === "local" ? localClient : client;
   const trackingKey = activeClient
     ? listeningHistoryKey(activeClient.server, activeClient.username)
@@ -901,6 +915,40 @@ export default function App() {
   );
   const [listeningHistoryPersistent, setListeningHistoryPersistent] = useState(
     () => safeRead(localStorage, LISTENING_HISTORY_PERSIST_KEY) !== "false",
+  );
+  const listeningStorage = listeningHistoryPersistent ? localStorage : sessionStorage;
+  const [listeningEventsState, setListeningEventsState] = useState(() => ({
+    key: trackingKey,
+    persistent: listeningHistoryPersistent,
+    enabled: listeningHistoryEnabled,
+    events:
+      listeningHistoryEnabled
+        ? readListeningHistory(listeningStorage, trackingKey)
+        : [],
+  }));
+  const listeningEvents =
+    listeningEventsState.key === trackingKey &&
+    listeningEventsState.persistent === listeningHistoryPersistent &&
+    listeningEventsState.enabled === listeningHistoryEnabled
+      ? listeningEventsState.events
+      : [];
+  const setListeningEvents = useCallback<
+    Dispatch<SetStateAction<ListeningEvent[]>>
+  >(
+    (update) => {
+      setListeningEventsState((current) => {
+        const currentEvents =
+          current.key === trackingKey ? current.events : [];
+        return {
+          key: trackingKey,
+          persistent: listeningHistoryPersistent,
+          enabled: listeningHistoryEnabled,
+          events:
+            typeof update === "function" ? update(currentEvents) : update,
+        };
+      });
+    },
+    [listeningHistoryEnabled, listeningHistoryPersistent, trackingKey],
   );
   const [recommendationTuning, setRecommendationTuning] =
     useState<RecommendationTuning>(() => readRecommendationTuning(localStorage));
@@ -926,8 +974,6 @@ export default function App() {
     notify("Recommendation engine restored to defaults.");
   }, [notify]);
   const [engineOpen, setEngineOpen] = useState(false);
-  const [listeningEvents, setListeningEvents] = useState<ListeningEvent[]>([]);
-  const listeningStorage = listeningHistoryPersistent ? localStorage : sessionStorage;
   const engagementKey = activeClient
     ? engagementStorageKey(activeClient.server, activeClient.username)
     : "";
@@ -994,7 +1040,7 @@ export default function App() {
       const next = appendListeningEvent(listeningStorage, storageKey, event);
       if (storageKey === trackingKey) setListeningEvents(next);
     },
-    [listeningHistoryEnabled, listeningStorage, trackingKey],
+    [listeningHistoryEnabled, listeningStorage, setListeningEvents, trackingKey],
   );
   const recordEngagement = useCallback(
     (input: EngagementEventInput) => {
@@ -1051,11 +1097,16 @@ export default function App() {
       LISTENING_HISTORY_PERSIST_KEY,
       String(listeningHistoryPersistent),
     );
-    setListeningEvents(
-      listeningHistoryEnabled
-        ? readListeningHistory(listeningStorage, trackingKey)
-        : [],
-    );
+    if (
+      listeningEventsState.key !== trackingKey ||
+      listeningEventsState.persistent !== listeningHistoryPersistent ||
+      listeningEventsState.enabled !== listeningHistoryEnabled
+    )
+      setListeningEvents(
+        listeningHistoryEnabled
+          ? readListeningHistory(listeningStorage, trackingKey)
+          : [],
+      );
     setEngagementEvents(
       listeningHistoryEnabled ? readEngagement(listeningStorage, engagementKey) : [],
     );
@@ -1073,8 +1124,12 @@ export default function App() {
     impressionKey,
     listeningHistoryEnabled,
     listeningHistoryPersistent,
+    listeningEventsState.enabled,
+    listeningEventsState.key,
+    listeningEventsState.persistent,
     listeningStorage,
     rankerModelKey,
+    setListeningEvents,
     trackingKey,
   ]);
   const listeningProfile = useMemo(
@@ -1184,6 +1239,14 @@ export default function App() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const playlistSongsRef = useRef<Song[]>([]);
   const [pins, setPins] = useState<LibraryPin[]>([]);
+  const [pinAnimationKey, setPinAnimationKey] = useState("");
+  const pinAnimationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (pinAnimationTimer.current) clearTimeout(pinAnimationTimer.current);
+    },
+    [],
+  );
   const pinArtworkHydration = useRef(new Set<string>());
   const [accounts, setAccounts] = useState<SavedAccount[]>(readAccounts);
   const rememberAccount = useCallback(
@@ -1294,21 +1357,27 @@ export default function App() {
   const togglePin = useCallback(
     (pin: LibraryPin) => {
       if (!pinStorageKey) return;
-      setPins((current) => {
-        const exists = current.some(
-          (item) => item.kind === pin.kind && item.id === pin.id,
-        );
-        const next = exists
-          ? current.filter(
-              (item) => !(item.kind === pin.kind && item.id === pin.id),
-            )
-          : [...current, pin];
-        safeWrite(localStorage, pinStorageKey, JSON.stringify(next));
-        notify(exists ? `Unpinned ${pin.name}.` : `Pinned ${pin.name}.`);
-        return next;
-      });
+      const exists = pins.some(
+        (item) => item.kind === pin.kind && item.id === pin.id,
+      );
+      const next = exists
+        ? pins.filter(
+            (item) => !(item.kind === pin.kind && item.id === pin.id),
+          )
+        : [...pins, pin];
+      setPins(next);
+      safeWrite(localStorage, pinStorageKey, JSON.stringify(next));
+      notify(
+        exists ? `Unpinned ${pin.name}.` : `Pinned ${pin.name}.`,
+        "success",
+      );
+      if (!exists && pin.kind !== "playlist") {
+        setPinAnimationKey(pinKey(pin));
+        if (pinAnimationTimer.current) clearTimeout(pinAnimationTimer.current);
+        pinAnimationTimer.current = setTimeout(() => setPinAnimationKey(""), 700);
+      }
     },
-    [notify, pinStorageKey],
+    [notify, pinKey, pinStorageKey, pins],
   );
   const [panel, setPanel] = useState<"queue" | "lyrics" | null>(null);
   const [contextTarget, setContextTarget] = useState<ContextTarget | null>(
@@ -1342,6 +1411,9 @@ export default function App() {
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => safeRead(localStorage, "volta-sidebar-collapsed") === "true",
+  );
+  const [separatePinnedEntities, setSeparatePinnedEntities] = useState(
+    () => safeRead(localStorage, "volta-separate-pinned-entities") === "true",
   );
   // Below 640px the sidebar is a drawer; above it, a collapsible icon rail.
   const [compactLayout, setCompactLayout] = useState(
@@ -1636,6 +1708,13 @@ export default function App() {
     );
   }, [sidebarCollapsed]);
   useEffect(() => {
+    safeWrite(
+      localStorage,
+      "volta-separate-pinned-entities",
+      String(separatePinnedEntities),
+    );
+  }, [separatePinnedEntities]);
+  useEffect(() => {
     const media = window.matchMedia?.("(max-width: 640px)");
     if (!media) return;
     const update = () => setCompactLayout(media.matches);
@@ -1921,11 +2000,6 @@ export default function App() {
     setSearchTab("all");
   }, [debouncedQuery]);
   useEffect(() => {
-    if (!notice) return;
-    const timer = setTimeout(() => setNotice(""), 5000);
-    return () => clearTimeout(timer);
-  }, [notice]);
-  useEffect(() => {
     try {
       sessionStorage.removeItem("volta-password");
     } catch {
@@ -2020,6 +2094,96 @@ export default function App() {
       );
     },
     [notify, player.stop],
+  );
+  const persistLocalMetadata = useCallback(
+    async (edits: Array<{ path: string; metadata: LocalMetadataPatch }>) => {
+      if (sourceMode !== "local" || !localMusic) return null;
+      const validEdits = edits.filter((edit) => edit.path);
+      if (!validEdits.length) {
+        notify("This local file has no editable path.", "error");
+        return null;
+      }
+      try {
+        await writeLocalMetadataOverrides(validEdits);
+        const updated = applyLocalMetadataEdits(localMusic, validEdits);
+        setLocalMusic(updated);
+        validEdits.forEach(({ path }) => {
+          const song = updated.tracks.find((track) => track.localPath === path);
+          if (song) player.updateSongMetadata(song);
+        });
+        notify("Local metadata saved on this device.", "success");
+        return updated;
+      } catch {
+        notify("Could not save local metadata. Try again.", "error");
+        return null;
+      }
+    },
+    [localMusic, notify, player.updateSongMetadata, sourceMode],
+  );
+  const saveLocalSongMetadata = useCallback(
+    async (song: Song, metadata: LocalMetadataPatch) => {
+      if (!song.localPath) return null;
+      const updated = await persistLocalMetadata([
+        { path: song.localPath, metadata },
+      ]);
+      const saved = updated?.tracks.find((track) => track.id === song.id) || null;
+      const oldArtistId = localMusic?.artists.find(
+        (artist) => artist.name === song.albumArtist,
+      )?.id;
+      const newArtistId = updated?.artists.find(
+        (artist) => artist.name === saved?.albumArtist,
+      )?.id;
+      if (
+        saved?.albumId &&
+        route.page === "album" &&
+        route.id === song.albumId &&
+        route.id !== saved.albumId
+      )
+        navigate({ page: "album", id: saved.albumId, title: saved.album });
+      if (
+        saved?.albumArtist &&
+        route.page === "artist" &&
+        route.id === oldArtistId &&
+        newArtistId &&
+        route.id !== newArtistId
+      )
+        navigate({
+          page: "artist",
+          id: newArtistId,
+          title: saved.albumArtist,
+        });
+      return saved;
+    },
+    [localMusic, navigate, persistLocalMetadata, route],
+  );
+  const saveLocalAlbumMetadata = useCallback(
+    async (album: AlbumRecord, metadata: LocalMetadataPatch) => {
+      if (!localMusic) return null;
+      const albumSongs = localMusic.tracks.filter(
+        (song) => song.albumId === album.id,
+      );
+      const updated = await persistLocalMetadata(
+        albumSongs.flatMap((song) =>
+          song.localPath
+            ? [{ path: song.localPath, metadata }]
+            : [],
+        ),
+      );
+      const updatedSong = updated?.tracks.find(
+        (song) => albumSongs.some((previous) => previous.id === song.id),
+      );
+      const saved =
+        updated?.albums.find((item) => item.id === updatedSong?.albumId) || null;
+      if (
+        saved &&
+        route.page === "album" &&
+        route.id === album.id &&
+        route.id !== saved.id
+      )
+        navigate({ page: "album", id: saved.id, title: albumName(saved) });
+      return saved;
+    },
+    [localMusic, navigate, persistLocalMetadata, route],
   );
   const chooseMusicFolder = useCallback(async () => {
     if (!supportsDirectoryPicker()) {
@@ -2860,8 +3024,17 @@ export default function App() {
     (song: Song) => favorites[song.id] ?? Boolean(song.starred),
     [favorites],
   );
-  const favorite = useCallback(async (song: Song) => {
+  const favorite = useCallback(async (song: Song, announce = true) => {
     const wasFavorite = isFavorite(song);
+    const announceFavorite = (active: boolean) => {
+      if (!announce) return;
+      notify(
+        active
+          ? `Added “${song.title}” to favorites.`
+          : `Removed “${song.title}” from favorites.`,
+        "success",
+      );
+    };
     const noteFavorite = (active: boolean) => {
       recordEngagement({
         kind: active ? "favorite-add" : "favorite-remove",
@@ -2877,16 +3050,22 @@ export default function App() {
         return next;
       });
       noteFavorite(!wasFavorite);
+      announceFavorite(!wasFavorite);
       return;
     }
-    if (!client || favoritePending.has(song.id)) return;
+    if (!client || favoritePending.has(song.id)) {
+      if (!announce) throw new Error("This favorite is already being updated.");
+      return;
+    }
     setFavoritePending((old) => new Set(old).add(song.id));
     try {
       await client.star(song, wasFavorite);
       setFavorites((old) => ({ ...old, [song.id]: !wasFavorite }));
       noteFavorite(!wasFavorite);
+      announceFavorite(!wasFavorite);
     } catch {
-      notify("Could not update this favorite. Try again.");
+      if (announce) notify("Could not update this favorite. Try again.", "error");
+      else throw new Error("Could not update this favorite.");
     } finally {
       setFavoritePending((old) => {
         const next = new Set(old);
@@ -3285,20 +3464,28 @@ export default function App() {
         next
           ? `${albumName(album)} will play next.`
           : `${albumName(album)} added to the queue.`,
+        "success",
       );
     } catch {
       notify("This album could not be added to the queue. Try again.");
     }
   }, [learnFromOutcome, loadAlbumSongs, notify, player.append, recordEngagement]);
   const queueSong = useCallback(
-    (song: Song, next = false) => {
+    (song: Song, next = false, announce = true) => {
       player.append(song, next);
       recordEngagement({
         kind: next ? "play-next" : "queue-add",
         entity: engagementEntityForSong(song),
       });
+      if (announce)
+        notify(
+          next
+            ? `“${song.title}” will play next.`
+            : `“${song.title}” added to the queue.`,
+          "success",
+        );
     },
-    [learnFromOutcome, player.append, recordEngagement],
+    [notify, player.append, recordEngagement],
   );
   const notInterested = useCallback(
     (target: { song?: Song; album?: AlbumRecord }) => {
@@ -4290,12 +4477,13 @@ export default function App() {
         player.append(song);
       });
       if (additions.length) {
-        setNotice(
+        notify(
           `${additions.length} song${additions.length === 1 ? "" : "s"} added to queue`,
+          "success",
         );
       }
     } catch {
-      setNotice("Infinite Play could not load more songs.");
+      notify("Infinite Play could not load more songs.", "error");
     } finally {
       setInfinitePlayBusy(false);
     }
@@ -4308,6 +4496,7 @@ export default function App() {
     infinitePlayBusy,
     infinitePlayCount,
     infinitePlayMode,
+    notify,
     player,
     recommendedAlbums,
     sourceMode,
@@ -4538,15 +4727,31 @@ export default function App() {
   const bulkFavorite = useCallback(
     async (songs: Song[]) => {
       const allFavorite = songs.every((song) => isFavorite(song));
+      let updated = 0;
+      let failed = 0;
       for (const song of songs) {
         if (isFavorite(song) === allFavorite) continue;
-        await favorite(song);
+        try {
+          await favorite(song, false);
+          updated += 1;
+        } catch {
+          failed += 1;
+        }
       }
-      notify(
-        allFavorite
-          ? `Removed ${songs.length} favorite${songs.length === 1 ? "" : "s"}.`
-          : `Favorited ${songs.length} song${songs.length === 1 ? "" : "s"}.`,
-      );
+      if (failed)
+        notify(
+          updated
+            ? `${updated} saved, ${failed} favorite update${failed === 1 ? "" : "s"} could not be saved.`
+            : `${failed} favorite update${failed === 1 ? "" : "s"} could not be saved.`,
+          "error",
+        );
+      else if (updated)
+        notify(
+          allFavorite
+            ? `Removed ${updated} favorite${updated === 1 ? "" : "s"}.`
+            : `Favorited ${updated} song${updated === 1 ? "" : "s"}.`,
+          "success",
+        );
     },
     [favorite, isFavorite, notify],
   );
@@ -4579,9 +4784,10 @@ export default function App() {
         <button
           className="secondary-button"
           disabled={!selectedSongs.length || bulkBusy}
-          onClick={() =>
-            void bulkRun((songs) => {
-              [...songs].reverse().forEach((song) => queueSong(song, true));
+            onClick={() =>
+              void bulkRun((songs) => {
+              [...songs].reverse().forEach((song) => queueSong(song, true, false));
+              notify(`${songs.length} song${songs.length === 1 ? "" : "s"} will play next.`, "success");
             })
           }
         >
@@ -4591,9 +4797,10 @@ export default function App() {
         <button
           className="secondary-button"
           disabled={!selectedSongs.length || bulkBusy}
-          onClick={() =>
-            void bulkRun((songs) => {
-              songs.forEach((song) => queueSong(song));
+            onClick={() =>
+              void bulkRun((songs) => {
+              songs.forEach((song) => queueSong(song, false, false));
+              notify(`${songs.length} song${songs.length === 1 ? "" : "s"} added to the queue.`, "success");
             })
           }
         >
@@ -4699,6 +4906,7 @@ export default function App() {
       onPlay={playSongs}
       onQueue={queueSong}
       onFavorite={favorite}
+      onDetails={setDetailsSong}
       isFavorite={isFavorite}
       onAlbum={openAlbumById}
       onShare={shareSong}
@@ -4927,7 +5135,9 @@ export default function App() {
         onCloseMobile={() => setMobileSidebar(false)}
         onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
         pinKey={pinKey}
+        pinAnimationKey={pinAnimationKey}
         pins={displayPins}
+        separatePinnedEntities={separatePinnedEntities}
         route={route}
         searchRef={searchRef}
         showSearch={showSearch}
@@ -5147,6 +5357,7 @@ export default function App() {
                   externalLyricsEnabled={externalLyricsEnabled}
                   lyricsBlurEnabled={lyricsBlurEnabled}
                   floatingSidebar={floatingSidebar}
+                  separatePinnedEntities={separatePinnedEntities}
                   forgetAccount={forgetAccount}
                   frameMonitorEnabled={frameMonitor}
                   infinitePlayBusy={infinitePlayBusy}
@@ -5172,6 +5383,7 @@ export default function App() {
                   setExternalLyricsEnabled={setExternalLyricsEnabled}
                   setLyricsBlurEnabled={setLyricsBlurEnabled}
                   setFloatingSidebar={setFloatingSidebar}
+                  setSeparatePinnedEntities={setSeparatePinnedEntities}
                   setFrameMonitorEnabled={setFrameMonitor}
                   setInfinitePlayCount={setInfinitePlayCount}
                   setInfinitePlayMode={setInfinitePlayMode}
@@ -5596,6 +5808,34 @@ export default function App() {
                               : "Favorite"}
                           </button>
                         )}
+                        {route.page === "album" && data.album && (
+                          <button
+                            className="secondary-button"
+                            aria-pressed={isPinned("album", data.album.id)}
+                            data-pin-added={
+                              pinAnimationKey === pinKey({
+                                kind: "album",
+                                id: data.album.id,
+                                name: albumName(data.album),
+                              })
+                                ? "true"
+                                : undefined
+                            }
+                            onClick={() =>
+                              data.album &&
+                              togglePin({
+                                kind: "album",
+                                id: data.album.id,
+                                name: albumName(data.album),
+                                coverArt: data.album.coverArt,
+                                imageUrl: data.album.localArtworkUrl,
+                              })
+                            }
+                          >
+                            <Pin size={15} fill={isPinned("album", data.album.id) ? "currentColor" : "none"} />
+                            {isPinned("album", data.album.id) ? "Unpin" : "Pin"}
+                          </button>
+                        )}
                         {route.page === "playlist" && canEditPlaylist && (
                           <button
                             className="secondary-button"
@@ -5733,6 +5973,15 @@ export default function App() {
                                 : "Pin"
                             }
                             aria-pressed={isPinned("artist", data.artist.id)}
+                            data-pin-added={
+                              pinAnimationKey === pinKey({
+                                kind: "artist",
+                                id: data.artist.id,
+                                name: data.artist.name,
+                              })
+                                ? "true"
+                                : undefined
+                            }
                             onClick={() =>
                               data.artist &&
                               togglePin({
@@ -6098,6 +6347,9 @@ export default function App() {
         savePlaylist={savePlaylist}
         setDetailsAlbum={setDetailsAlbum}
         setDetailsSong={setDetailsSong}
+        saveLocalSongMetadata={saveLocalSongMetadata}
+        saveLocalAlbumMetadata={saveLocalAlbumMetadata}
+        sourceMode={sourceMode}
         setEngineOpen={setEngineOpen}
         setListeningHistoryOpen={setListeningHistoryOpen}
         setPlaylistDraft={setPlaylistDraft}

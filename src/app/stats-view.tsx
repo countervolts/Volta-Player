@@ -264,7 +264,7 @@ function ActivityCharts({
               <XAxis dataKey="label" interval="preserveStartEnd" tick={axisTick} tickLine={false} />
               <YAxis allowDecimals={false} tick={axisTick} tickLine={false} />
               <RechartsTooltip contentStyle={tooltipStyle} cursor={{ stroke: "var(--accent)", strokeOpacity: 0.45 }} formatter={tooltipFormatter("plays")} />
-              <Area dataKey="plays" fill={`url(#stats-plays-${period})`} stroke="var(--accent)" strokeWidth={2} type="monotone" />
+              <Area dataKey="plays" fill={`url(#stats-plays-${period})`} isAnimationActive={false} stroke="var(--accent)" strokeWidth={2} type="monotone" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -281,7 +281,7 @@ function ActivityCharts({
               <XAxis dataKey="label" interval="preserveStartEnd" tick={axisTick} tickLine={false} />
               <YAxis allowDecimals={false} tick={axisTick} tickLine={false} />
               <RechartsTooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--hover)" }} formatter={tooltipFormatter("min")} />
-              <Bar dataKey="minutes" fill="var(--accent)" maxBarSize={32} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="minutes" fill="var(--accent)" isAnimationActive={false} maxBarSize={32} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -305,6 +305,7 @@ function GenreBreakdown({ items }: { items: readonly RankedListeningItem[] }) {
                   cy="50%"
                   data={genreData}
                   dataKey="plays"
+                  isAnimationActive={false}
                   innerRadius="54%"
                   outerRadius="78%"
                   paddingAngle={2}
@@ -360,6 +361,8 @@ export function StatsView({
   const timeFormatter = useMemo(
     () =>
       new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
         hour: "numeric",
         minute: "2-digit",
       }),
@@ -471,8 +474,8 @@ export function StatsView({
             </div>
           </section>
           <div className="stats-info-bar">
-            <span>First play <b>{timeFormatter.format(stats.firstPlayedAt)}</b></span>
-            <span>Last play <b>{timeFormatter.format(stats.lastPlayedAt)}</b></span>
+            <span>First play <b>{stats.firstPlayedAt ? timeFormatter.format(stats.firstPlayedAt) : "—"}</b></span>
+            <span>Last play <b>{stats.lastPlayedAt ? timeFormatter.format(stats.lastPlayedAt) : "—"}</b></span>
             <span>Active days <b>{stats.activeDays}</b></span>
           </div>
           <ActivityCharts period={period} timeline={stats.timeline} />
