@@ -10,6 +10,7 @@ import {
 import {
   Activity,
   AudioLines,
+  BellRing,
   Blend,
   Brain,
   ChevronDown,
@@ -52,6 +53,7 @@ import { clearListeningHistory, type ListeningEvent } from "../lib/listening-his
 import type { Player } from "../lib/use-player";
 import type { ShortcutId } from "../shortcuts";
 import type { SettingsFocus } from "./app-model";
+import type { NotificationKind } from "./notifications";
 import { Select } from "./custom-select";
 import {
   clearVoltaCaches,
@@ -110,12 +112,13 @@ type Props = {
   listeningEvents: ListeningEvent[];
   listeningHistoryEnabled: boolean;
   normalization: "off" | "track" | "album";
-  notify: (message: string) => void;
+  notify: (message: string, kind?: NotificationKind) => void;
   player: Player;
   rankerModel: { samples: number };
   /** Opens the standalone recommendation engine screen. */
   openEngine: () => void;
   refreshCollectionOnVisit: boolean;
+  separatePinnedEntities: boolean;
   resetLearning: () => void;
   setAnimatedArtwork: Setter<boolean>;
   setAnimateArtworkEverywhere: Setter<boolean>;
@@ -126,6 +129,7 @@ type Props = {
   setExternalLyricsEnabled: Setter<boolean>;
   setLyricsBlurEnabled: Setter<boolean>;
   setFloatingSidebar: Setter<boolean>;
+  setSeparatePinnedEntities: Setter<boolean>;
   setFrameMonitorEnabled: Setter<boolean>;
   setInfinitePlayCount: Setter<number>;
   setInfinitePlayMode: Setter<InfinitePlayMode>;
@@ -238,6 +242,7 @@ export function SettingsView({
   player,
   rankerModel,
   refreshCollectionOnVisit,
+  separatePinnedEntities,
   resetLearning,
   setAnimatedArtwork,
   setAnimateArtworkEverywhere,
@@ -248,6 +253,7 @@ export function SettingsView({
   setExternalLyricsEnabled,
   setLyricsBlurEnabled,
   setFloatingSidebar,
+  setSeparatePinnedEntities,
   setFrameMonitorEnabled,
   setInfinitePlayCount,
   setInfinitePlayMode,
@@ -469,6 +475,23 @@ export function SettingsView({
                                 String(event.target.checked),
                               );
                             }}
+                          />
+                        </div>
+                        <div className="setting-row setting-toggle">
+                          <SettingIcon tone="teal">
+                            <PanelLeft size={16} />
+                          </SettingIcon>
+                          <span className="setting-copy">
+                            <b>Separate pinned artists and albums</b>
+                            <small>Show albums and artists in their own sidebar sections</small>
+                          </span>
+                          <input
+                            aria-label="Separate pinned artists and albums"
+                            type="checkbox"
+                            checked={separatePinnedEntities}
+                            onChange={(event) =>
+                              setSeparatePinnedEntities(event.target.checked)
+                            }
                           />
                         </div>
                         <div className="setting-row setting-action-row">
@@ -1095,6 +1118,68 @@ export function SettingsView({
                               }
                             />
                           </label>
+                          <div className="setting-row setting-action-row notification-preview-row">
+                            <SettingIcon tone="pink">
+                              <BellRing size={16} />
+                            </SettingIcon>
+                            <span className="setting-copy">
+                              <b>Notification previews</b>
+                              <small>
+                                Preview each notification style and its entrance
+                                and dismissal motion.
+                              </small>
+                            </span>
+                            <div className="notification-preview-buttons">
+                              <button
+                                className="secondary-button"
+                                aria-label="Test info notification"
+                                onClick={() =>
+                                  notify(
+                                    "Your playlist has new recommendations.",
+                                    "info",
+                                  )
+                                }
+                              >
+                                Info
+                              </button>
+                              <button
+                                className="secondary-button"
+                                aria-label="Test success notification"
+                                onClick={() =>
+                                  notify(
+                                    "<Song Name> was added to your favorites.",
+                                    "success",
+                                  )
+                                }
+                              >
+                                Success
+                              </button>
+                              <button
+                                className="secondary-button"
+                                aria-label="Test playback notification"
+                                onClick={() =>
+                                  notify(
+                                    "<Song name> - <Artist Name>",
+                                    "playback",
+                                  )
+                                }
+                              >
+                                Playback
+                              </button>
+                              <button
+                                className="secondary-button"
+                                aria-label="Test error notification"
+                                onClick={() =>
+                                  notify(
+                                    "The playlist could not be updated. Please try again.",
+                                    "error",
+                                  )
+                                }
+                              >
+                                Error
+                              </button>
+                            </div>
+                          </div>
                           <div className="setting-row setting-action-row">
                             <SettingIcon tone="gray">
                               <ClipboardCopy size={16} />

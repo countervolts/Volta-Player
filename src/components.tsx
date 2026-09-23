@@ -23,6 +23,7 @@ import {
   Disc3,
   Ellipsis,
   GripVertical,
+  Info,
   ListEnd,
   ListMusic,
   ListPlus,
@@ -860,6 +861,7 @@ export function SongMenu({
   song,
   onQueue,
   onFavorite,
+  onDetails,
   favorite,
   onAlbum,
   onAddToPlaylist,
@@ -869,6 +871,7 @@ export function SongMenu({
   song: Song;
   onQueue: (song: Song, next?: boolean) => void;
   onFavorite: (song: Song) => void;
+  onDetails?: (song: Song) => void;
   favorite: boolean;
   onAlbum?: (id: string) => void;
   onAddToPlaylist?: (song: Song) => void;
@@ -878,7 +881,7 @@ export function SongMenu({
   return (
     <Dropdown.Root>
       <Dropdown.Trigger asChild>
-        <IconButton label={`Options for ${song.title}`}>
+        <IconButton label="Options">
           <Ellipsis size={18} />
         </IconButton>
       </Dropdown.Trigger>
@@ -897,6 +900,12 @@ export function SongMenu({
             <ListEnd size={16} />
             Play Last
           </Dropdown.Item>
+          {onDetails && (
+            <Dropdown.Item onSelect={() => onDetails(song)}>
+              <Info size={16} />
+              View Details
+            </Dropdown.Item>
+          )}
           <Dropdown.Separator />
           {onAddToPlaylist && (
             <Dropdown.Item onSelect={() => onAddToPlaylist(song)}>
@@ -1017,6 +1026,7 @@ export const TrackTable = memo(function TrackTable({
   onPlay,
   onQueue,
   onFavorite,
+  onDetails,
   isFavorite,
   onAlbum,
   onContextMenu,
@@ -1040,6 +1050,7 @@ export const TrackTable = memo(function TrackTable({
   onPlay: (songs: Song[], index: number, restart?: boolean) => void;
   onQueue: (song: Song, next?: boolean) => void;
   onFavorite: (song: Song) => void;
+  onDetails?: (song: Song) => void;
   isFavorite: (song: Song) => boolean;
   onAlbum: (id: string) => void;
   onContextMenu?: (event: ReactMouseEvent, song: Song) => void;
@@ -1254,6 +1265,7 @@ export const TrackTable = memo(function TrackTable({
             song={song}
             onQueue={onQueue}
             onFavorite={onFavorite}
+            onDetails={onDetails}
             favorite={isFavorite(song)}
             onAlbum={onAlbum}
             onAddToPlaylist={onAddToPlaylist}

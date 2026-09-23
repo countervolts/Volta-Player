@@ -64,6 +64,8 @@ export type Song = {
    */
   path?: string;
   localPath?: string;
+  /** Import-time path used to resolve a local file when the library root is stripped. */
+  localFilePath?: string;
   localUrl?: string;
   localArtworkUrl?: string;
   localModified?: number;
@@ -847,7 +849,7 @@ export class Navidrome {
   stream(song: Song, original: boolean): string {
     if (song.source === "local") {
       // Resolved on demand so a scan does not mint a blob URL per track.
-      const url = song.localUrl || localFileUrl(song.localPath);
+      const url = song.localUrl || localFileUrl(song.localFilePath || song.localPath);
       if (url) return url;
     }
     return this.url("stream", {

@@ -1,4 +1,4 @@
-import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, SetStateAction } from "react";
+import { useState, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type SetStateAction } from "react";
 import { Disc3, ListMusic, ListPlus, Search, UserRound, X } from "lucide-react";
 import {
   Artwork,
@@ -31,8 +31,10 @@ import {
 import { ListeningHistoryView } from "./app-views";
 import { RecommendationEngineDialog } from "./recommendation-engine-dialog";
 import { SongCreditsPanel } from "./song-credits";
+import { NotificationToast, type NotificationNotice } from "./notifications";
 import type { AlbumRecommendationInput } from "../lib/recommendations";
 import type { RecommendationTuning } from "../lib/recommendation-tuning";
+import type { LocalMetadataPatch } from "../lib/local-music";
 import {
   PLAYLIST_DESCRIPTION_MAX_LENGTH,
   type ContextTarget,
@@ -41,6 +43,190 @@ import {
 } from "./app-model";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
+type LocalMetadataEditorProps = {
+  busy?: boolean;
+  onCancel: () => void;
+  onSave: (metadata: LocalMetadataPatch) => void | Promise<void>;
+};
+
+function MetadataTextField({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: "text" | "number";
+}) {
+  return (
+    <label className="local-metadata-field">
+      {label}
+      <input
+        aria-label={label}
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        min={type === "number" ? 0 : undefined}
+        step={type === "number" ? 1 : undefined}
+      />
+    </label>
+  );
+}
+
+function SongMetadataEditor({
+  song,
+  onCancel,
+  onSave,
+}: LocalMetadataEditorProps & { song: Song }) {
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState({
+    title: song.title,
+    artist: song.artist || "",
+    albumArtist: song.albumArtist || "",
+    composer: song.composer || "",
+    album: song.album || "",
+    track: song.track ? String(song.track) : "",
+    discNumber: song.discNumber ? String(song.discNumber) : "",
+    year: song.year ? String(song.year) : "",
+    genre: song.genre || "",
+  });
+  const text = (key: keyof typeof draft) => (value: string) =>
+    setDraft((current) => ({ ...current, [key]: value }));
+  const number = (value: string) =>
+    value.trim() && Number.isFinite(Number(value)) ? Number(value) : undefined;
+
+  return (
+    <form
+      className="local-metadata-form"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        try {
+          await onSave({
+            title: draft.title,
+            artist: draft.artist,
+            albumArtist: draft.albumArtist,
+            composer: draft.composer,
+            album: draft.album,
+            track: number(draft.track),
+            discNumber: number(draft.discNumber),
+            year: number(draft.year),
+            genre: draft.genre,
+          });
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <p>Saved in Volta on this device. Your audio file stays untouched.</p>
+      <div className="local-metadata-fields">
+        <MetadataTextField label="Title" value={draft.title} onChange={text("title")} />
+        <MetadataTextField label="Artist" value={draft.artist} onChange={text("artist")} />
+        <MetadataTextField label="Album artist" value={draft.albumArtist} onChange={text("albumArtist")} />
+        <MetadataTextField label="Album" value={draft.album} onChange={text("album")} />
+        <MetadataTextField label="Composer" value={draft.composer} onChange={text("composer")} />
+        <MetadataTextField label="Genre" value={draft.genre} onChange={text("genre")} />
+        <MetadataTextField label="Track number" value={draft.track} onChange={text("track")} type="number" />
+        <MetadataTextField label="Disc number" value={draft.discNumber} onChange={text("discNumber")} type="number" />
+        <MetadataTextField label="Year" value={draft.year} onChange={text("year")} type="number" />
+      </div>
+      <div className="local-metadata-actions">
+        <button className="secondary-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+        <button className="primary-button" type="submit" disabled={busy}>
+          {busy ? "Saving…" : "Save metadata"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function AlbumMetadataEditor({
+  album,
+  onCancel,
+  onSave,
+}: LocalMetadataEditorProps & { album: AlbumRecord }) {
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState({
+    album: albumName(album),
+    artist: album.artist || "",
+    year: album.year ? String(album.year) : "",
+    genre: album.genre || "",
+  });
+  const text = (key: keyof typeof draft) => (value: string) =>
+    setDraft((current) => ({ ...current, [key]: value }));
+
+  return (
+    <form
+      className="local-metadata-form"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        try {
+          await onSave({
+            album: draft.album,
+            albumArtist: draft.artist,
+            year: draft.year.trim() && Number.isFinite(Number(draft.year))
+              ? Number(draft.year)
+              : undefined,
+            genre: draft.genre,
+          });
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <p>Saved in Volta on this device. Your audio files stay untouched.</p>
+      <div className="local-metadata-fields">
+        <MetadataTextField label="Album" value={draft.album} onChange={text("album")} />
+        <MetadataTextField label="Album artist" value={draft.artist} onChange={text("artist")} />
+        <MetadataTextField label="Year" value={draft.year} onChange={text("year")} type="number" />
+        <MetadataTextField label="Genre" value={draft.genre} onChange={text("genre")} />
+      </div>
+      <div className="local-metadata-actions">
+        <button className="secondary-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+        <button className="primary-button" type="submit" disabled={busy}>
+          {busy ? "Saving…" : "Save metadata"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+const codecNames: Record<string, string> = {
+  aac: "AAC",
+  "ac-3": "Dolby Digital (AC-3)",
+  alac: "Apple Lossless (ALAC)",
+  "e-ac-3": "Dolby Digital Plus (E-AC-3)",
+  flac: "FLAC",
+  mp3: "MP3",
+  opus: "Opus",
+  pcm: "PCM",
+  vorbis: "Vorbis",
+};
+const audioCodecName = (song: Song) => {
+  const codec = song.codec?.trim().toLowerCase();
+  if (codec) {
+    if (codec.startsWith("mp4a")) return "AAC";
+    return codecNames[codec] || song.codec!.trim().toUpperCase();
+  }
+  const suffix = song.suffix?.replace(/^\./, "").toLowerCase();
+  const inferred: Record<string, string> = {
+    aac: "AAC",
+    aif: "PCM",
+    aiff: "PCM",
+    alac: "Apple Lossless (ALAC)",
+    flac: "FLAC",
+    mp3: "MP3",
+    opus: "Opus",
+    wav: "PCM",
+    wave: "PCM",
+    wma: "Windows Media Audio",
+  };
+  if (suffix && inferred[suffix]) return inferred[suffix];
+  return suffix ? `Unknown (${suffix.toUpperCase()})` : "Unknown";
+};
 type Props = {
   addSongsToPlaylist: (playlist: Playlist, songs: Song[]) => void | Promise<void>;
   changeListeningHistoryPersistence: (value: boolean) => void;
@@ -70,8 +256,8 @@ type Props = {
   listeningProfile: ListeningProfile;
   modifierLabel: string;
   navigate: (next: Route) => void;
-  notice: string;
-  setNotice: Setter<string>;
+  notice: NotificationNotice | null;
+  setNotice: Setter<NotificationNotice | null>;
   player: Player;
   volumeScrollStep: number;
   volumeShiftScrollStep: number;
@@ -94,6 +280,15 @@ type Props = {
   savePlaylist: () => void | Promise<void>;
   setDetailsAlbum: Setter<AlbumRecord | null>;
   setDetailsSong: Setter<Song | null>;
+  saveLocalSongMetadata: (
+    song: Song,
+    metadata: LocalMetadataPatch,
+  ) => Promise<Song | null>;
+  saveLocalAlbumMetadata: (
+    album: AlbumRecord,
+    metadata: LocalMetadataPatch,
+  ) => Promise<AlbumRecord | null>;
+  sourceMode: "navidrome" | "local";
   setEngineOpen: Setter<boolean>;
   setListeningHistoryOpen: Setter<boolean>;
   setPlaylistDraft: Setter<PlaylistDraft | null>;
@@ -156,6 +351,9 @@ export function AppDialogs({
   resetRecommendationTuning,
   resetShortcuts,
   savePlaylist,
+  saveLocalSongMetadata,
+  saveLocalAlbumMetadata,
+  sourceMode,
   setDetailsAlbum,
   setDetailsSong,
   setEngineOpen,
@@ -172,6 +370,8 @@ export function AppDialogs({
   sidebarPlaylists,
   updateRecommendationTuning,
 }: Props) {
+  const [editingSongMetadata, setEditingSongMetadata] = useState(false);
+  const [editingAlbumMetadata, setEditingAlbumMetadata] = useState(false);
   return (
     <>
       {fullPlayer && (
@@ -351,7 +551,10 @@ export function AppDialogs({
       </Modal>
       <Modal
         open={Boolean(detailsSong)}
-        onClose={() => setDetailsSong(null)}
+        onClose={() => {
+          setEditingSongMetadata(false);
+          setDetailsSong(null);
+        }}
         title="Song details"
         className="media-details-dialog"
       >
@@ -366,70 +569,114 @@ export function AppDialogs({
             />
             <div className="media-details-copy">
               <h3>{detailsSong.title}</h3>
-              <p>{detailsSong.artist || "Unknown artist"}</p>
-              {detailsSong.album && <small>{detailsSong.album}</small>}
-              <dl>
-                <div>
-                  <dt>Duration</dt>
-                  <dd>{duration(detailsSong.duration)}</dd>
-                </div>
-                <div>
-                  <dt>Format</dt>
-                  <dd>
-                    {isLossless(detailsSong)
-                      ? "Lossless"
-                      : detailsSong.suffix?.toUpperCase() || "Unknown"}
-                  </dd>
-                </div>
-                {detailsSong.year && (
-                  <div>
-                    <dt>Year</dt>
-                    <dd>{detailsSong.year}</dd>
+              {editingSongMetadata && sourceMode === "local" ? (
+                <SongMetadataEditor
+                  key={detailsSong.id}
+                  song={detailsSong}
+                  onCancel={() => setEditingSongMetadata(false)}
+                  onSave={async (metadata) => {
+                    const saved = await saveLocalSongMetadata(detailsSong, metadata);
+                    if (saved) {
+                      setDetailsSong(saved);
+                      setEditingSongMetadata(false);
+                    }
+                  }}
+                />
+              ) : (
+                <>
+                  <p>{detailsSong.artist || "Unknown artist"}</p>
+                  {detailsSong.album && <small>{detailsSong.album}</small>}
+                  <dl>
+                    <div>
+                      <dt>Duration</dt>
+                      <dd>{duration(detailsSong.duration)}</dd>
+                    </div>
+                    <div>
+                      <dt>Audio codec</dt>
+                      <dd>{audioCodecName(detailsSong)}</dd>
+                    </div>
+                    <div>
+                      <dt>Format</dt>
+                      <dd>
+                        {isLossless(detailsSong)
+                          ? "Lossless"
+                          : detailsSong.suffix?.toUpperCase() || "Unknown"}
+                      </dd>
+                    </div>
+                    {detailsSong.year && (
+                      <div>
+                        <dt>Year</dt>
+                        <dd>{detailsSong.year}</dd>
+                      </div>
+                    )}
+                    {detailsSong.genre && (
+                      <div>
+                        <dt>Genre</dt>
+                        <dd>{detailsSong.genre}</dd>
+                      </div>
+                    )}
+                    {detailsSong.track && (
+                      <div>
+                        <dt>Track</dt>
+                        <dd>{detailsSong.track}</dd>
+                      </div>
+                    )}
+                  </dl>
+                  <SongCreditsPanel song={detailsSong} />
+                  <div className="media-details-actions">
+                    {sourceMode === "local" && (
+                      <button
+                        className="secondary-button"
+                        onClick={() => setEditingSongMetadata(true)}
+                      >
+                        Edit metadata
+                      </button>
+                    )}
+                    {detailsSong.albumId && (
+                      <button
+                        className="secondary-button"
+                        onClick={() => {
+                          setDetailsSong(null);
+                          navigate({
+                            page: "album",
+                            id: detailsSong.albumId,
+                            title: detailsSong.album,
+                          });
+                        }}
+                      >
+                        <Disc3 size={15} />
+                        Go to Album
+                      </button>
+                    )}
+                    {detailsSong.artistId && (
+                      <button
+                        className="secondary-button"
+                        onClick={() => {
+                          setDetailsSong(null);
+                          navigate({
+                            page: "artist",
+                            id: detailsSong.artistId,
+                            title: detailsSong.artist,
+                          });
+                        }}
+                      >
+                        <UserRound size={15} />
+                        Go to Artist
+                      </button>
+                    )}
                   </div>
-                )}
-              </dl>
-              <SongCreditsPanel song={detailsSong} />
-              <div className="media-details-actions">
-                {detailsSong.albumId && (
-                  <button
-                    className="secondary-button"
-                    onClick={() => {
-                      setDetailsSong(null);
-                      navigate({
-                        page: "album",
-                        id: detailsSong.albumId,
-                        title: detailsSong.album,
-                      });
-                    }}
-                  >
-                    <Disc3 size={15} />
-                    Go to Album
-                  </button>
-                )}
-                {detailsSong.artistId && (
-                  <button
-                    className="secondary-button"
-                    onClick={() => {
-                      setDetailsSong(null);
-                      navigate({
-                        page: "artist",
-                        id: detailsSong.artistId,
-                        title: detailsSong.artist,
-                      });
-                    }}
-                  >
-                    <UserRound size={15} />
-                    Go to Artist
-                  </button>
-                )}
-              </div>
+                </>
+              )}
             </div>
           </div>
         )}
       </Modal>
       <Modal
         open={Boolean(detailsAlbum)}
-        onClose={() => setDetailsAlbum(null)}
+        onClose={() => {
+          setEditingAlbumMetadata(false);
+          setDetailsAlbum(null);
+        }}
         title="Album details"
         className="media-details-dialog"
       >
@@ -444,61 +691,86 @@ export function AppDialogs({
             />
             <div className="media-details-copy">
               <h3>{albumName(detailsAlbum)}</h3>
-              <p>{detailsAlbum.artist || "Unknown artist"}</p>
-              <dl>
-                <div>
-                  <dt>Songs</dt>
-                  <dd>{detailsAlbum.songCount ?? "Unknown"}</dd>
-                </div>
-                <div>
-                  <dt>Duration</dt>
-                  <dd>{duration(detailsAlbum.duration)}</dd>
-                </div>
-                {detailsAlbum.year && (
-                  <div>
-                    <dt>Year</dt>
-                    <dd>{detailsAlbum.year}</dd>
-                  </div>
-                )}
-                {detailsAlbum.genre && (
-                  <div>
-                    <dt>Genre</dt>
-                    <dd>{detailsAlbum.genre}</dd>
-                  </div>
-                )}
-              </dl>
-              <div className="media-details-actions">
-                <button
-                  className="secondary-button"
-                  onClick={() => {
-                    setDetailsAlbum(null);
-                    navigate({
-                      page: "album",
-                      id: detailsAlbum.id,
-                      title: albumName(detailsAlbum),
-                    });
+              {editingAlbumMetadata && sourceMode === "local" ? (
+                <AlbumMetadataEditor
+                  key={detailsAlbum.id}
+                  album={detailsAlbum}
+                  onCancel={() => setEditingAlbumMetadata(false)}
+                  onSave={async (metadata) => {
+                    const saved = await saveLocalAlbumMetadata(detailsAlbum, metadata);
+                    if (saved) {
+                      setDetailsAlbum(saved);
+                      setEditingAlbumMetadata(false);
+                    }
                   }}
-                >
-                  <Disc3 size={15} />
-                  Open Album
-                </button>
-                {detailsAlbum.artistId && (
-                  <button
-                    className="secondary-button"
-                    onClick={() => {
-                      setDetailsAlbum(null);
-                      navigate({
-                        page: "artist",
-                        id: detailsAlbum.artistId,
-                        title: detailsAlbum.artist,
-                      });
-                    }}
-                  >
-                    <UserRound size={15} />
-                    Go to Artist
-                  </button>
-                )}
-              </div>
+                />
+              ) : (
+                <>
+                  <p>{detailsAlbum.artist || "Unknown artist"}</p>
+                  <dl>
+                    <div>
+                      <dt>Songs</dt>
+                      <dd>{detailsAlbum.songCount ?? "Unknown"}</dd>
+                    </div>
+                    <div>
+                      <dt>Duration</dt>
+                      <dd>{duration(detailsAlbum.duration)}</dd>
+                    </div>
+                    {detailsAlbum.year && (
+                      <div>
+                        <dt>Year</dt>
+                        <dd>{detailsAlbum.year}</dd>
+                      </div>
+                    )}
+                    {detailsAlbum.genre && (
+                      <div>
+                        <dt>Genre</dt>
+                        <dd>{detailsAlbum.genre}</dd>
+                      </div>
+                    )}
+                  </dl>
+                  <div className="media-details-actions">
+                    {sourceMode === "local" && (
+                      <button
+                        className="secondary-button"
+                        onClick={() => setEditingAlbumMetadata(true)}
+                      >
+                        Edit metadata
+                      </button>
+                    )}
+                    <button
+                      className="secondary-button"
+                      onClick={() => {
+                        setDetailsAlbum(null);
+                        navigate({
+                          page: "album",
+                          id: detailsAlbum.id,
+                          title: albumName(detailsAlbum),
+                        });
+                      }}
+                    >
+                      <Disc3 size={15} />
+                      Open Album
+                    </button>
+                    {detailsAlbum.artistId && (
+                      <button
+                        className="secondary-button"
+                        onClick={() => {
+                          setDetailsAlbum(null);
+                          navigate({
+                            page: "artist",
+                            id: detailsAlbum.artistId,
+                            title: detailsAlbum.artist,
+                          });
+                        }}
+                      >
+                        <UserRound size={15} />
+                        Go to Artist
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -618,14 +890,7 @@ export function AppDialogs({
           </p>
         </div>
       </Modal>
-      {notice && (
-        <div className="toast" role="status">
-          <span>{notice}</span>
-          <IconButton label="Dismiss message" onClick={() => setNotice("")}>
-            <X size={16} />
-          </IconButton>
-        </div>
-      )}
+      <NotificationToast notice={notice} setNotice={setNotice} />
     </>
   );
 }

@@ -37,7 +37,9 @@ type Props = {
   onCloseMobile: () => void;
   onToggleCollapsed: () => void;
   pinKey: (pin: Pin) => string;
+  pinAnimationKey: string;
   pins: Pin[];
+  separatePinnedEntities: boolean;
   route: Route;
   searchRef: RefObject<HTMLInputElement>;
   showSearch: () => void;
@@ -60,7 +62,9 @@ export function LibrarySidebar({
   onCloseMobile,
   onToggleCollapsed,
   pinKey,
+  pinAnimationKey,
   pins,
+  separatePinnedEntities,
   route,
   searchRef,
   showSearch,
@@ -71,6 +75,47 @@ export function LibrarySidebar({
 }: Props) {
   // Collapsed rows keep their icon only, so the label moves to a tooltip.
   const hint = (label: string) => (collapsed ? label : undefined);
+  const renderPinRows = (items: Pin[]) =>
+    items.map((pin) => (
+      <div
+        className="sidebar-pin"
+        data-pin-added={pinAnimationKey === pinKey(pin) ? "true" : undefined}
+        key={pinKey(pin)}
+      >
+        <Tooltip label={hint(pin.name)}>
+          <button
+            className={
+              (route.page === pin.kind && route.id === pin.id
+                ? "selected"
+                : "") + " sidebar-pin-open"
+            }
+            onClick={() =>
+              navigate({ page: pin.kind, id: pin.id, title: pin.name })
+            }
+          >
+            {pin.coverArt || pin.imageUrl ? (
+              <Artwork
+                client={client}
+                id={pin.coverArt}
+                imageUrl={pin.imageUrl}
+                size={60}
+                eager
+              />
+            ) : pin.kind === "album" ? (
+              <Disc3 />
+            ) : pin.kind === "artist" ? (
+              <Mic2 />
+            ) : (
+              <ListMusic />
+            )}
+            <span>{pin.name}</span>
+          </button>
+        </Tooltip>
+        <IconButton label={`Unpin ${pin.name}`} onClick={() => togglePin(pin)}>
+          <X size={13} />
+        </IconButton>
+      </div>
+    ));
   return (
     <aside className="library-sidebar">
       <div className="sidebar-brand">
@@ -210,43 +255,33 @@ export function LibrarySidebar({
           ))}
         {pins.length > 0 && (
           <>
-            <h2>Pinned</h2>
-            {pins.map((pin) => (
-              <div className="sidebar-pin" key={pinKey(pin)}>
-                <Tooltip label={hint(pin.name)}>
-                  <button
-                    className={
-                      (route.page === pin.kind && route.id === pin.id
-                        ? "selected"
-                        : "") + " sidebar-pin-open"
-                    }
-                    onClick={() =>
-                      navigate({ page: pin.kind, id: pin.id, title: pin.name })
-                    }
-                  >
-                    {pin.coverArt || pin.imageUrl ? (
-                      <Artwork
-                        client={client}
-                        id={pin.coverArt}
-                        imageUrl={pin.imageUrl}
-                        size={60}
-                        eager
-                      />
-                    ) : pin.kind === "album" ? (
-                      <Disc3 />
-                    ) : pin.kind === "artist" ? (
-                      <Mic2 />
-                    ) : (
-                      <ListMusic />
-                    )}
-                    <span>{pin.name}</span>
-                  </button>
-                </Tooltip>
-                <IconButton label={`Unpin ${pin.name}`} onClick={() => togglePin(pin)}>
-                  <X size={13} />
-                </IconButton>
-              </div>
-            ))}
+            {separatePinnedEntities ? (
+              <>
+                {pins.some((pin) => pin.kind === "album") && (
+                  <>
+                    <h2>Pinned Albums</h2>
+                    {renderPinRows(pins.filter((pin) => pin.kind === "album"))}
+                  </>
+                )}
+                {pins.some((pin) => pin.kind === "artist") && (
+                  <>
+                    <h2>Pinned Artists</h2>
+                    {renderPinRows(pins.filter((pin) => pin.kind === "artist"))}
+                  </>
+                )}
+                {pins.some((pin) => pin.kind === "playlist") && (
+                  <>
+                    <h2>Pinned Playlists</h2>
+                    {renderPinRows(pins.filter((pin) => pin.kind === "playlist"))}
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <h2>Pinned</h2>
+                {renderPinRows(pins)}
+              </>
+            )}
           </>
         )}
       </nav>

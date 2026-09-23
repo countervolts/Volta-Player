@@ -89,7 +89,7 @@ type WarmDeck = {
   readyListener: EventListener;
 };
 const WARM_DECK_COUNT = 2;
-const HANDOFF_LEAD_SECONDS = 0.01;
+const HANDOFF_LEAD_SECONDS = 0.04;
 const HANDOFF_POLL_MS = 4;
 const CROSSFADE_POLL_MS = 16;
 const LISTENING_SESSION_GAP_MS = 20 * 60 * 1000;
@@ -170,6 +170,8 @@ class PlaybackController {
   // does not offer a sample-perfect queue player, but promotion of a ready deck
   // avoids a new request and metadata wait at the boundary.
   private standby: WarmDeck[] = [];
+  /** A prepared deck may start while the current one finishes its last samples. */
+  private promotingStandby: WarmDeck | null = null;
   private alac: AlacPlayback;
   private normalization: NormalizationMode = "off";
   private crossfadeSeconds = 0;
@@ -648,6 +650,10 @@ class PlaybackController {
   private clearStandby() {
     const standby = this.standby;
     this.standby = [];
+    if (this.promotingStandby) {
+      this.promotingStandby.audio.pause();
+      this.promotingStandby = null;
+    }
     standby.forEach((deck) => {
       // A deck mid-blend is no longer in `standby`; `cancelCrossfade` stops it,
       // and every teardown path calls that first.
@@ -704,6 +710,7 @@ class PlaybackController {
     this.standby = this.standby.filter((deck) => {
       const keep = desiredKeys.has(deck.entryKey);
       if (!keep) {
+        if (this.promotingStandby === deck) this.promotingStandby = null;
         deck.audio.removeEventListener("canplay", deck.readyListener);
         deck.audio.removeEventListener("canplaythrough", deck.readyListener);
         deck.audio.pause();
@@ -753,6 +760,48 @@ class PlaybackController {
       standby.entryKey !== this.entries[nextIndex]?.key
     )
       return false;
+    if (this.promotingStandby) return this.promotingStandby === standby;
+    const outgoing = this.audio;
+    if (this.desiredPlaying && outgoing && !outgoing.paused && !outgoing.ended) {
+      this.promotingStandby = standby;
+      void standby.audio.play().then(
+        () => {
+          if (this.promotingStandby !== standby) {
+            standby.audio.pause();
+            return;
+          }
+          this.promotingStandby = null;
+          if (
+            !this.standby.includes(standby) ||
+            standby.entryKey !== this.entries[nextIndex]?.key ||
+            standby.index !== nextIndex
+          ) {
+            standby.audio.pause();
+            return;
+          }
+          this.activateStandby(standby, nextIndex, endKind, true);
+        },
+        () => {
+          if (this.promotingStandby !== standby) return;
+          this.promotingStandby = null;
+          // The outgoing track is still playing. Retry from the handoff monitor
+          // or its ended event rather than turning a transient play rejection
+          // into a longer pause.
+          if (this.desiredPlaying) this.startHandoffMonitor();
+        },
+      );
+      return true;
+    }
+    this.activateStandby(standby, nextIndex, endKind, false);
+    return true;
+  }
+
+  private activateStandby(
+    standby: WarmDeck,
+    nextIndex: number,
+    endKind: "skip" | "complete",
+    alreadyPlaying: boolean,
+  ) {
     this.finishListening(
       endKind,
       endKind === "complete" ? "automatic-complete" : "manual-next",
@@ -783,8 +832,8 @@ class PlaybackController {
         standby.audio.duration,
         this.entries[nextIndex].song.duration ?? 0,
       ),
-      playing: false,
-      loading: true,
+      playing: alreadyPlaying,
+      loading: !alreadyPlaying,
       activeStream: this.state.original ? "original" : "compatible",
     });
     this.resetListen();
@@ -792,8 +841,8 @@ class PlaybackController {
     this.clearLoadTimer();
     this.setMetadata();
     this.primeUpcoming();
-    this.play();
-    return true;
+    if (alreadyPlaying) this.didPlay();
+    else this.play();
   }
 
   private startHandoffMonitor() {
@@ -1081,6 +1130,20 @@ class PlaybackController {
     this.loadCurrent(position, autoplay);
   };
 
+  updateSongMetadata = (song: Song) => {
+    let changed = false;
+    const entries = new Set([...this.entries, ...this.orderedEntries]);
+    for (const entry of entries) {
+      if (entry.song.id !== song.id) continue;
+      entry.song = song;
+      changed = true;
+    }
+    if (!changed) return;
+    if (this.listen?.song.id === song.id) this.listen.song = song;
+    this.update({ queue: this.entries.map((entry) => entry.song) });
+    if (this.current?.id === song.id) this.setMetadata();
+  };
+
   restoreSession = (session: PlaybackSession) => {
     if (!session.queue.length || !this.client) return;
     this.finishListening("skip", "session-restored");
@@ -1210,6 +1273,10 @@ class PlaybackController {
   };
 
   private pause = () => {
+    if (this.promotingStandby) {
+      this.promotingStandby.audio.pause();
+      this.promotingStandby = null;
+    }
     this.sampleListen();
     this.clearLoadTimer();
     this.clearResumeRecovery();
@@ -2048,6 +2115,7 @@ export function usePlayer(
     playSongs: controller.playSongs,
     restoreSession: controller.restoreSession,
     restoreSong: controller.restoreSong,
+    updateSongMetadata: controller.updateSongMetadata,
     restart: controller.restart,
     toggle: controller.toggle,
     previous: controller.previous,

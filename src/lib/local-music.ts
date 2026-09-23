@@ -14,6 +14,7 @@ import { startLocalLibraryScan } from "./local-library-perf";
 const LOCAL_MUSIC_DB = "volta-local-music";
 const LOCAL_MUSIC_STORE = "settings";
 const LOCAL_METADATA_STORE = "track-metadata";
+const LOCAL_METADATA_OVERRIDES_STORE = "track-metadata-overrides";
 const LOCAL_ARTWORK_STORE = "folder-artwork";
 const LOCAL_MUSIC_HANDLE_KEY = "music-directory";
 
@@ -77,7 +78,24 @@ export type LocalMusicLibrary = {
    * library cannot revoke URLs belonging to a newer one.
    */
   fileSet?: LocalFileSet;
+  /** Raw embedded tags are kept separate from Volta-only metadata edits. */
+  metadataBaseline?: Map<string, ParsedMetadata>;
 };
+
+export type LocalMetadataPatch = Partial<
+  Pick<
+    Song,
+    | "title"
+    | "artist"
+    | "albumArtist"
+    | "composer"
+    | "album"
+    | "track"
+    | "discNumber"
+    | "year"
+    | "genre"
+  >
+>;
 
 export const supportsDirectoryPicker = () =>
   typeof window !== "undefined" &&
@@ -109,6 +127,7 @@ export type CachedMetadata = {
   size: number;
   lastModified: number;
   metadata: ParsedMetadata;
+  overrides?: LocalMetadataPatch;
 };
 
 /** Embedded cover art remembered across sessions, keyed by folder path. */
@@ -302,7 +321,7 @@ const readId3Metadata = async (
   head: Uint8Array,
   includeArtwork: boolean,
 ): Promise<ParsedMetadata> => {
-  const metadata: ParsedMetadata = {};
+  const metadata: ParsedMetadata = { codec: "mp3" };
   const version = head[3] || 3;
   const tagEnd = Math.min(id3TagEnd(head, file.size), MAX_METADATA_BYTES);
   let offset = 10;
@@ -400,6 +419,14 @@ const parseMp4 = (bytes: Uint8Array, includeArtwork = true): ParsedMetadata => {
               metadata.bitDepth = bigEndian16(bytes, entry + 26);
               metadata.samplingRate = bigEndian32(bytes, entry + 32) >>> 16;
             }
+          } else if (codec === "mp4a") {
+            metadata.codec = "aac";
+          } else if (codec === "ac-3") {
+            metadata.codec = "ac-3";
+          } else if (codec === "ec-3") {
+            metadata.codec = "e-ac-3";
+          } else if (codec === "opus") {
+            metadata.codec = "opus";
           }
           entry = entryEnd;
         }
@@ -502,7 +529,7 @@ const readFlacMetadata = async (
   head: Uint8Array,
   includeArtwork: boolean,
 ): Promise<ParsedMetadata> => {
-  const metadata: ParsedMetadata = {};
+  const metadata: ParsedMetadata = { codec: "flac" };
   const readAt = async (start: number, length: number) =>
     start + length <= head.length
       ? head.subarray(start, start + length)
@@ -596,6 +623,7 @@ const readAudioMetadataBatch = async (
   files: LocalFileEntry[],
   /** Already-known metadata for unchanged files, keyed by library path. */
   cached?: ReadonlyMap<string, CachedMetadata>,
+  rootName = "",
 ) => {
   const metadata: ParsedMetadata[] = Array.from(
     { length: files.length },
@@ -606,7 +634,10 @@ const readAudioMetadataBatch = async (
     while (nextIndex < files.length) {
       const index = nextIndex++;
       const entry = files[index];
-      const hit = cached?.get(entry.path);
+      const parts = entry.path.split(/[\\/]/).filter(Boolean);
+      const cachePath =
+        rootName && parts[0] === rootName ? parts.slice(1).join("/") : entry.path;
+      const hit = cached?.get(cachePath) || cached?.get(entry.path);
       if (
         hit &&
         hit.size === entry.file.size &&
@@ -715,7 +746,9 @@ export const cacheLibraryMetadata = async (
         path: track.localPath || track.id,
         size: track.size || 0,
         lastModified: track.localModified || 0,
-        metadata: metadataFromSong(track),
+        metadata:
+          library.metadataBaseline?.get(track.localPath || track.id) ||
+          metadataFromSong(track),
       })),
       cached,
     ),
@@ -758,7 +791,8 @@ const trackFromFile = (
     contentType: file.type || undefined,
     size: file.size,
     localModified: file.lastModified,
-    localPath: relativePath,
+    localPath: stablePath,
+    localFilePath: stablePath === relativePath ? undefined : relativePath,
   };
 };
 
@@ -854,7 +888,11 @@ const libraryFromFiles = async (
     audioFiles,
     new Set(folderArtwork.keys()),
   );
-  const metadata = await readAudioMetadataBatch(audioFiles, cached);
+  const metadata = await readAudioMetadataBatch(
+    audioFiles,
+    cached,
+    source === "files" ? directoryName : "",
+  );
   scan.mark("tags");
   const folderArtworkResult = await readFolderArtwork(
     audioFiles,
@@ -879,24 +917,49 @@ const libraryFromFiles = async (
   const albumsById = new Map<string, AlbumRecord>();
   const artistsById = new Map<string, Artist>();
   const artistAlbumIds = new Map<string, Set<string>>();
+  const metadataBaseline = new Map<string, ParsedMetadata>();
   const trackEntries = audioFiles
-    .map(({ file, path }, index) => ({
-      track: trackFromFile(
+    .map(({ file, path }, index) => {
+      const parts = path.split(/[\\/]/).filter(Boolean);
+      const cachePath =
+        source === "files" && parts[0] === directoryName
+          ? parts.slice(1).join("/")
+          : path;
+      const tags = metadata[index];
+      const cachedTags = cached?.get(cachePath) || cached?.get(path);
+      const track = trackFromFile(
         file,
         path,
-        metadata[index],
+        { ...tags, ...cachedTags?.overrides },
         source === "files" ? directoryName : "",
-      ),
-      // The folder's representative track supplied this cover.
-      embeddedCover: albumArtworkByDirectory.get(pathDirectory(path)),
-    }))
+      );
+      metadataBaseline.set(track.localPath || track.id, tags);
+      return {
+        track,
+        filePath: path,
+        // The folder's representative track supplied this cover.
+        embeddedCover: albumArtworkByDirectory.get(pathDirectory(path)),
+      };
+    })
     .sort((left, right) => compareMetadataTracks(left.track, right.track));
   const tracks = trackEntries.map(({ track }) => track);
   scan.mark("tracks");
   // Playback URLs are minted on demand from these files instead of one object
   // URL per track up front.
   const fileSet = registerLocalFiles(
-    audioFiles.map((entry) => ({ path: entry.path, file: entry.file })),
+    audioFiles.flatMap((entry) => {
+      const parts = entry.path.split(/[\\/]/).filter(Boolean);
+      const stablePath =
+        source === "files" && parts[0] === directoryName
+          ? parts.slice(1).join("/")
+          : entry.path;
+      return stablePath === entry.path
+        ? [{ path: entry.path, file: entry.file }]
+        : [
+            { path: entry.path, file: entry.file },
+            { path: stablePath, file: entry.file },
+          ];
+    }),
   );
 
   tracks.forEach((track, index) => {
@@ -906,10 +969,11 @@ const libraryFromFiles = async (
     const artistId = localArtistId(artist);
     const albumArtistId = localArtistId(albumArtist);
     const albumId = localAlbumId(albumArtist, album);
-    const directory = pathDirectory(track.localPath || "");
+    const artworkPath = trackEntries[index].filePath;
+    const directory = pathDirectory(artworkPath);
     const albumCover = folderArtwork.get(directory) || undefined;
     const songCover = sameStemArtwork.get(
-      `${directory}\u001f${normalizedStem(track.localPath || "")}`,
+      `${directory}\u001f${normalizedStem(artworkPath)}`,
     );
     const embeddedCover = trackEntries[index].embeddedCover;
     const trackCover = embeddedCover || songCover || albumCover;
@@ -928,11 +992,15 @@ const libraryFromFiles = async (
       name: album,
       artist: albumArtist,
       artistId: albumArtistId,
+      year: track.year,
+      genre: track.genre,
       song: [],
       songCount: 0,
       duration: 0,
       localModified: 0,
     };
+    if (!albumRecord.year && track.year) albumRecord.year = track.year;
+    if (!albumRecord.genre && track.genre) albumRecord.genre = track.genre;
     albumRecord.song!.push(track);
     albumRecord.songCount = albumRecord.song!.length;
     albumRecord.localModified = Math.max(
@@ -965,7 +1033,7 @@ const libraryFromFiles = async (
     const artistCover =
       folderArtwork.get(
         artistDirectory(
-          track.localPath || "",
+          artworkPath,
           source === "files" ? directoryName : "",
         ),
       ) || albumRecord.localArtworkUrl;
@@ -1007,8 +1075,106 @@ const libraryFromFiles = async (
     artworkUrls,
     freshFolderArtwork: folderArtworkResult.fresh,
     fileSet,
+    metadataBaseline,
   };
 };
+
+/** Rebuild the local artist and album indexes after an in-app metadata edit. */
+export function applyLocalMetadataEdits(
+  library: LocalMusicLibrary,
+  edits: Array<{ path: string; metadata: LocalMetadataPatch }>,
+): LocalMusicLibrary {
+  const editsByPath = new Map(edits.map((edit) => [edit.path, edit.metadata]));
+  const tracks = library.tracks
+    .map((song) => {
+      const patch = editsByPath.get(song.localPath || "");
+      if (!patch) return song;
+      const edited = { ...song, ...patch };
+      const filename = song.localPath?.split(/[\\/]/).at(-1) || "";
+      const titleFallback = filename.replace(/\.[^.]+$/, "").trim();
+      const artist = edited.artist?.trim() || "Unknown artist";
+      const albumArtist = edited.albumArtist?.trim() || artist;
+      const album = edited.album?.trim() || "Unknown album";
+      return {
+        ...edited,
+        title: edited.title?.trim() || titleFallback || "Untitled track",
+        artist,
+        albumArtist,
+        album,
+        artistId: localArtistId(artist),
+        albumId: localAlbumId(albumArtist, album),
+      };
+    })
+    .sort(compareMetadataTracks);
+  const albumsById = new Map<string, AlbumRecord>();
+  const artistsById = new Map<string, Artist>();
+  const artistAlbumIds = new Map<string, Set<string>>();
+
+  for (const song of tracks) {
+    const albumId = song.albumId || localAlbumId(song.albumArtist || "", song.album || "");
+    const albumArtist = song.albumArtist || song.artist || "Unknown artist";
+    const albumArtistId = localArtistId(albumArtist);
+    const album = albumsById.get(albumId) || {
+      id: albumId,
+      source: "local" as const,
+      name: song.album || "Unknown album",
+      artist: albumArtist,
+      artistId: albumArtistId,
+      year: song.year,
+      genre: song.genre,
+      song: [],
+      songCount: 0,
+      duration: 0,
+      localArtworkUrl: song.localArtworkUrl,
+      localModified: 0,
+    };
+    album.song!.push(song);
+    album.songCount = album.song!.length;
+    album.localModified = Math.max(album.localModified || 0, song.localModified || 0);
+    if (!album.year && song.year) album.year = song.year;
+    if (!album.genre && song.genre) album.genre = song.genre;
+    albumsById.set(albumId, album);
+
+    const artist = artistsById.get(albumArtistId) || {
+      id: albumArtistId,
+      source: "local" as const,
+      name: albumArtist,
+      album: [],
+      albumCount: 0,
+      localArtworkUrl: song.localArtworkUrl,
+      localModified: 0,
+    };
+    let artistAlbums = artistAlbumIds.get(albumArtistId);
+    if (!artistAlbums) {
+      artistAlbums = new Set<string>();
+      artistAlbumIds.set(albumArtistId, artistAlbums);
+    }
+    if (!artistAlbums.has(albumId)) {
+      artistAlbums.add(albumId);
+      artist.album!.push(album);
+      artist.albumCount = artist.album!.length;
+    }
+    artist.localModified = Math.max(artist.localModified || 0, song.localModified || 0);
+    artistsById.set(albumArtistId, artist);
+  }
+
+  const albums = [...albumsById.values()].sort((left, right) =>
+    (left.name || "").localeCompare(right.name || "", undefined, {
+      sensitivity: "base",
+    }),
+  );
+  const artists = [...artistsById.values()].sort((left, right) =>
+    left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+  );
+  const recentAlbums = [...albums].sort(
+    (left, right) =>
+      (right.localModified || 0) - (left.localModified || 0) ||
+      (left.name || "").localeCompare(right.name || "", undefined, {
+        sensitivity: "base",
+      }),
+  );
+  return { ...library, tracks, albums, artists, recentAlbums };
+}
 
 export async function localLibraryFromFileList(
   files: FileList | File[],
@@ -1073,7 +1239,7 @@ const openDatabase = (): Promise<IDBDatabase | null> =>
       resolve(null);
       return;
     }
-    const request = indexedDB.open(LOCAL_MUSIC_DB, 2);
+    const request = indexedDB.open(LOCAL_MUSIC_DB, 3);
     // Version 1 only had the settings store. Existing installs upgrade in place
     // and keep their saved directory handle.
     request.onupgradeneeded = () => {
@@ -1084,6 +1250,8 @@ const openDatabase = (): Promise<IDBDatabase | null> =>
         database.createObjectStore(LOCAL_METADATA_STORE);
       if (!database.objectStoreNames.contains(LOCAL_ARTWORK_STORE))
         database.createObjectStore(LOCAL_ARTWORK_STORE);
+      if (!database.objectStoreNames.contains(LOCAL_METADATA_OVERRIDES_STORE))
+        database.createObjectStore(LOCAL_METADATA_OVERRIDES_STORE);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -1160,8 +1328,14 @@ export async function readCachedMetadata(): Promise<Map<string, CachedMetadata>>
   const database = await openDatabase();
   if (!database) return new Map();
   return new Promise<Map<string, CachedMetadata>>((resolve, reject) => {
-    const transaction = database.transaction(LOCAL_METADATA_STORE, "readonly");
+    const transaction = database.transaction(
+      [LOCAL_METADATA_STORE, LOCAL_METADATA_OVERRIDES_STORE],
+      "readonly",
+    );
     const store = transaction.objectStore(LOCAL_METADATA_STORE);
+    const overridesStore = transaction.objectStore(
+      LOCAL_METADATA_OVERRIDES_STORE,
+    );
     const entries = new Map<string, CachedMetadata>();
     const cursor = store.openCursor();
     cursor.onsuccess = () => {
@@ -1170,6 +1344,22 @@ export async function readCachedMetadata(): Promise<Map<string, CachedMetadata>>
       const value = result.value as CachedMetadata | undefined;
       if (value && typeof value.size === "number")
         entries.set(String(result.key), value);
+      result.continue();
+    };
+    const overridesCursor = overridesStore.openCursor();
+    overridesCursor.onsuccess = () => {
+      const result = overridesCursor.result;
+      if (!result) return;
+      const key = String(result.key);
+      const previous = entries.get(key) || {
+        size: 0,
+        lastModified: 0,
+        metadata: {},
+      };
+      entries.set(key, {
+        ...previous,
+        overrides: result.value as LocalMetadataPatch,
+      });
       result.continue();
     };
     transaction.oncomplete = () => {
@@ -1181,6 +1371,30 @@ export async function readCachedMetadata(): Promise<Map<string, CachedMetadata>>
       reject(transaction.error);
     };
   });
+}
+
+/** Save editable metadata separately from scanned tags and rebuildable caches. */
+export async function writeLocalMetadataOverrides(
+  entries: Array<{ path: string; metadata: LocalMetadataPatch }>,
+): Promise<void> {
+  if (!entries.length) return;
+  const database = await openDatabase();
+  if (!database) throw new Error("Local metadata storage is unavailable.");
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(
+      LOCAL_METADATA_OVERRIDES_STORE,
+      "readwrite",
+    );
+    const store = transaction.objectStore(LOCAL_METADATA_OVERRIDES_STORE);
+    for (const entry of entries) {
+      const request = store.get(entry.path);
+      request.onsuccess = () =>
+        store.put({ ...(request.result || {}), ...entry.metadata }, entry.path);
+    }
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  }).finally(() => database.close());
 }
 
 /** Embedded cover art per folder, keyed by folder path. */

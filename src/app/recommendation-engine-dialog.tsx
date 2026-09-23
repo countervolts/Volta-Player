@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { RotateCcw, Sparkles } from "lucide-react";
 import { Modal, Tooltip } from "../components";
 import { albumName } from "../lib/navidrome";
@@ -227,12 +227,14 @@ export function RecommendationEngineDialog({
                       <label htmlFor={inputId}>{dial.label}</label>
                       <output>{value}%</output>
                     </div>
-                    <small>{hint}</small>                    <input
+                    <small>{hint}</small>
+                    <input
                       id={inputId}
                       type="range"
                       min={0}
                       max={100}
                       value={value}
+                      style={{ "--progress": `${value}%` } as CSSProperties}
                       onChange={(event) =>
                         onChange({
                           [dial.key]: Number(event.target.value) / 100,
